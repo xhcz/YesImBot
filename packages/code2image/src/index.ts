@@ -202,7 +202,7 @@ export default class CodeToImage {
             const buffer = base64ToArrayBuffer(base64Content[1]);
 
             logger.info("图片生成成功");
-            return Buffer.from(buffer);
+            return Buffer.from(buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer);
         } catch (error) {
             logger.error("生成图片时发生严重错误：");
             logger.error(error);
