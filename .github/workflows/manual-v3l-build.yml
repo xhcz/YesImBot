@@ -1,10 +1,7 @@
 name: Manual v3-legacy package build
-run-name: Build ${{ inputs.source_ref || 'ci/v3l-test-build' }}
+run-name: Build ${{ inputs.source_ref }}
 
 on:
-  push:
-    branches: [v4]
-    paths: [.github/workflows/manual-v3l-build.yml]
   workflow_dispatch:
     inputs:
       source_ref:
@@ -17,19 +14,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: v3l-build-${{ inputs.source_ref || 'ci/v3l-test-build' }}
+  group: v3l-build-${{ inputs.source_ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    if: "${{ github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'ci: run first v3l build' }}"
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Check out selected source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref || 'ci/v3l-test-build' }}
+          ref: ${{ inputs.source_ref }}
           persist-credentials: false
 
       - name: Setup Bun
@@ -49,7 +45,7 @@ jobs:
       - name: Verify and collect every package
         run: node scripts/verify-v3l-packages.mjs
         env:
-          SOURCE_REF: ${{ inputs.source_ref || 'ci/v3l-test-build' }}
+          SOURCE_REF: ${{ inputs.source_ref }}
 
       - name: Upload installable packages
         uses: actions/upload-artifact@v4
