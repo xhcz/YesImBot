@@ -64,8 +64,8 @@ if local_archive:
     zip_bytes = pathlib.Path(local_archive).read_bytes()
 else:
     if not run_id:
-        runs = data(f'{base}/actions/workflows/manual-v3l-build.yml/runs?event=workflow_dispatch&status=success&per_page=30')['workflow_runs']
-        if not runs: sys.exit('No successful manual builds found; pass --run-id after running the workflow')
+        runs = data(f'{base}/actions/workflows/manual-v3l-build.yml/runs?status=success&per_page=30')['workflow_runs']
+        if not runs: sys.exit('No successful builds found; pass --run-id after running the workflow')
         run_id = str(runs[0]['id'])
     artifacts = data(f'{base}/actions/runs/{run_id}/artifacts')['artifacts']
     match = next((item for item in artifacts if item['name'] == 'v3l-packages' and not item['expired']), None)
