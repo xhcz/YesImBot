@@ -25,7 +25,8 @@ Usage: ./install-v3l-artifact.sh [--run-id ID] [--dir ~/koishi] [--all] [--dry-r
   --all         Install every built package (default: YesImBot core and OneBot directory).
   --ref BRANCH  Expected source branch (default: ci/v3l-test-build).
   --archive ZIP Verify a locally downloaded Actions artifact instead of fetching it.
-  GH_TOKEN or GITHUB_TOKEN is optional for public artifacts; set it if GitHub denies download.
+  Artifact download requires GH_TOKEN/GITHUB_TOKEN (Actions: read), or a logged-in gh CLI.
+  Alternatively download the ZIP in a browser and pass --archive PATH.
 HELP
       exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
@@ -39,14 +40,20 @@ if [[ -n "$archive" ]]; then archive="$(realpath "$archive")"; fi
 export YIB_REPO="$repo" YIB_SOURCE_REF="$source_ref" YIB_RUN_ID="$run_id"
 export YIB_KOISHI_DIR="$koishi_dir" YIB_ARCHIVE="$archive" YIB_INSTALL_ALL="$install_all"
 
-mapfile -t package_files < <(python3 - <<'PY'
-import hashlib, json, os, pathlib, shutil, sys, tempfile, urllib.parse, urllib.request, zipfile
+selection_file="$(mktemp)"
+trap 'rm -f "$selection_file"' EXIT
+if ! python3 - > "$selection_file" <<'PY'
+import hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, urllib.error, urllib.parse, urllib.request, zipfile
 repo = os.environ['YIB_REPO']
 source_ref = os.environ['YIB_SOURCE_REF']
 run_id = os.environ['YIB_RUN_ID']
 root = pathlib.Path(os.environ['YIB_KOISHI_DIR'])
 local_archive = os.environ['YIB_ARCHIVE']
 token = os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+if not token and not local_archive and shutil.which('gh'):
+    token = subprocess.run(['gh', 'auth', 'token'], capture_output=True, text=True).stdout.strip()
+if not token and not local_archive:
+    sys.exit('GitHub Actions download needs GH_TOKEN (Actions: read), a logged-in gh CLI, or --archive PATH')
 base = f'https://api.github.com/repos/{repo}'
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -58,7 +65,10 @@ opener = urllib.request.build_opener(SafeRedirect())
 def fetch(url):
     headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'yesimbot-artifact-installer'}
     if token: headers['Authorization'] = 'Bearer ' + token
-    return opener.open(urllib.request.Request(url, headers=headers), timeout=60).read()
+    try: return opener.open(urllib.request.Request(url, headers=headers), timeout=60).read()
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403): sys.exit('GitHub denied artifact access; check GH_TOKEN Actions: read permission or use --archive PATH')
+        raise
 def data(url): return json.loads(fetch(url))
 if local_archive:
     zip_bytes = pathlib.Path(local_archive).read_bytes()
@@ -101,7 +111,10 @@ with tempfile.TemporaryDirectory(prefix='v3l-', dir=root) as temp:
     print(f'Build {run_id}: {info["sourceSha"]}; verified {len(info["packages"])} packages', file=sys.stderr)
     for entry in selected: print(target / entry['file'])
 PY
-)
+then
+  exit 1
+fi
+mapfile -t package_files < "$selection_file"
 ((${#package_files[@]})) || { echo 'No packages selected' >&2; exit 1; }
 if ((dry_run)); then printf 'Would install: %s\n' "${package_files[@]}"; exit 0; fi
 cd "$koishi_dir"
