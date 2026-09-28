@@ -1,0 +1,56 @@
+name: Manual v3-legacy package build
+run-name: Build ${{ inputs.source_ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch or commit in this fork to compile
+        required: true
+        default: ci/v3l-test-build
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v3l-build-${{ inputs.source_ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out selected source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.0
+
+      - name: Install workspace dependencies
+        run: bun install
+
+      - name: Compile all packages
+        run: bun run build
+
+      - name: Pack all packages
+        run: bun run pack
+
+      - name: Verify and collect every package
+        run: node scripts/verify-v3l-packages.mjs
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+
+      - name: Upload installable packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: v3l-packages
+          path: artifacts/v3l-packages/
+          if-no-files-found: error
+          retention-days: 14
