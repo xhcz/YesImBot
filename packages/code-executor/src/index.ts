@@ -18,13 +18,13 @@ export default class MultiEngineCodeExecutor {
     static readonly Config = Config;
     private readonly logger: Logger;
     private executors: CodeExecutor[] = [];
-    private toolDisposers: Array<() => void> = [];
+    private toolDisposers: (() => void)[] = [];
 
     private toolService: ToolService;
 
     constructor(
         public ctx: Context,
-        public config: Schemastery.TypeS<typeof Config>,
+        public config: Schemastery.TypeS<typeof Config>
     ) {
         this.logger = ctx.logger("code-executor");
         this.toolService = ctx[Services.Tool];
@@ -41,7 +41,6 @@ export default class MultiEngineCodeExecutor {
     private initializeEngines() {
         this.logger.info("Initializing code execution engines...");
         const engineConfigs = this.config.engines;
-        if (!engineConfigs?.python) return;
 
         // if (engineConfigs.javascript.enabled) {
         //     this.registerExecutor(new JavaScriptExecutor(this.ctx, engineConfigs.javascript, this.config.shared));
@@ -49,7 +48,7 @@ export default class MultiEngineCodeExecutor {
 
         // 2. Python Engine
         if (engineConfigs.python.enabled) {
-            this.registerExecutor(new PythonExecutor(this.ctx, engineConfigs.python, this.config.shared!));
+            this.registerExecutor(new PythonExecutor(this.ctx, engineConfigs.python, this.config.shared));
         }
     }
 
@@ -61,8 +60,9 @@ export default class MultiEngineCodeExecutor {
                 typeof unregister === "function"
                     ? unregister
                     : () => {
-                          if (this.toolService.getTool(toolDefinition.name) === toolDefinition) this.toolService.unregisterTool(toolDefinition.name);
-                      },
+                          if (this.toolService.getTool(toolDefinition.name) === toolDefinition)
+                              this.toolService.unregisterTool(toolDefinition.name);
+                      }
             );
             this.executors.push(executor);
             this.logger.info(`Successfully registered tool: ${toolDefinition.name}`);

@@ -1,7 +1,6 @@
+import { Context } from "koishi";
 import fs from "fs/promises";
 import path from "path";
-
-import { Context } from "koishi";
 import { Services } from "koishi-plugin-yesimbot/shared";
 
 import { BinaryInstaller } from "./BinaryInstaller";
@@ -53,7 +52,7 @@ export async function apply(ctx: Context, config: Config) {
                 // 创建必要目录
                 await fs.mkdir(path.join(dataDir, "mcp-ext", "bin"), { recursive: true });
                 await fs.mkdir(cacheDir, { recursive: true });
-            } catch {
+            } catch (error) {
                 logger.error("目录创建失败");
             }
             if (disposed) return;
@@ -67,7 +66,10 @@ export async function apply(ctx: Context, config: Config) {
 
             if (config.bunSettings?.autoDownload) {
                 logger.info("开始安装 Bun...");
-                installedBunPath = await binaryInstaller.installBun(config.bunSettings.bunVersion || "latest", config.globalSettings?.githubMirror);
+                installedBunPath = await binaryInstaller.installBun(
+                    config.bunSettings.bunVersion || "latest",
+                    config.globalSettings?.githubMirror
+                );
             }
             if (disposed) return;
 

@@ -2,9 +2,7 @@ import { createWriteStream } from "fs";
 import fs from "fs/promises";
 import path from "path";
 import Stream from "stream";
-
 import * as yauzl from "yauzl";
-
 import { Logger } from "./Logger";
 
 // 文件下载和解压工具类
@@ -63,7 +61,7 @@ export class FileManager {
                         zipfile.readEntry();
                         return;
                     }
-                    if (entry.fileName.endsWith("/")) {
+                    if (/\/$/.test(entry.fileName)) {
                         // 目录条目
                         fs.mkdir(entryPath, { recursive: true })
                             .then(() => {

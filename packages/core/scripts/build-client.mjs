@@ -1,6 +1,5 @@
-import { rename } from "node:fs/promises";
-
 import { build } from "esbuild";
+import { rename } from "node:fs/promises";
 
 await build({
     entryPoints: ["client/index.js"],

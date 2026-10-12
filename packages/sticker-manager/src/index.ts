@@ -1,6 +1,5 @@
 import { readFile } from "fs/promises";
-
-import { Context, Schema, h } from "koishi";
+import { Context, Schema, Session, h } from "koishi";
 import { AssetService, Extension, Failed, Infer, PromptService, Success, Tool } from "koishi-plugin-yesimbot/services";
 import { Services } from "koishi-plugin-yesimbot/shared";
 
@@ -25,7 +24,7 @@ export default class StickerTools {
         classificationPrompt: Schema.string()
             .role("textarea", { rows: [2, 4] })
             .default(
-                "请对以下表情包进行分类，已有分类：[{{categories}}]。选择最匹配的分类或创建新类别。只返回分类名称。分类应基于可能的使用语境（例如：工作、休闲、节日），避免模糊不清的名称（如“表情包”）。尽可能详细分类（如“庆祝成功”而非“快乐”）。若不确定，请思考此表情包的具体使用场景（例如：我应该在什么时候用它？）来帮助确定。",
+                "请对以下表情包进行分类，已有分类：[{{categories}}]。选择最匹配的分类或创建新类别。只返回分类名称。分类应基于可能的使用语境（例如：工作、休闲、节日），避免模糊不清的名称（如“表情包”）。尽可能详细分类（如“庆祝成功”而非“快乐”）。若不确定，请思考此表情包的具体使用场景（例如：我应该在什么时候用它？）来帮助确定。"
             )
             .description("多模态分类提示词模板，可使用 {{categories}} 占位符动态插入分类列表"),
     });
@@ -37,7 +36,7 @@ export default class StickerTools {
 
     constructor(
         public ctx: Context,
-        public config: StickerConfig,
+        public config: StickerConfig
     ) {
         this.assetService = ctx[Services.Asset];
         this.stickerService = new StickerService(ctx, config);
@@ -65,7 +64,6 @@ export default class StickerTools {
         ctx.command("sticker.import.emojihub <category> <filePath>", "导入 emojihub-bili 格式的 TXT 文件", { authority: 3 })
             .option("prefix", "-p [prefix:string] 自定义 URL 前缀")
             .action(async ({ session, options }, category, filePath) => {
-                if (!session) return "会话不可用";
                 if (!category) return "请指定分类名称";
                 if (!filePath) return "请指定 TXT 文件路径";
 
@@ -97,12 +95,13 @@ export default class StickerTools {
                 }
             });
 
-        ctx.command("sticker.import <sourceDir>", "从外部文件夹导入表情包。该文件夹须包含若干子文件夹作为分类，子文件夹下是表情包的图片文件。", {
-            authority: 3,
-        })
+        ctx.command(
+            "sticker.import <sourceDir>",
+            "从外部文件夹导入表情包。该文件夹须包含若干子文件夹作为分类，子文件夹下是表情包的图片文件。",
+            { authority: 3 }
+        )
             .option("force", "-f  强制覆盖已存在的表情包")
             .action(async ({ session, options }, sourceDir) => {
-                if (!session) return "会话不可用";
                 if (!sourceDir) return "请指定源文件夹路径";
 
                 try {
@@ -141,7 +140,7 @@ export default class StickerTools {
                     categories.map(async (c) => {
                         const count = await this.stickerService.getStickerCount(c);
                         return `- ${c} (${count} 个表情包)`;
-                    }),
+                    })
                 );
 
                 return `📁 表情包分类列表:\n${categoryWithCounts.join("\n")}`;
@@ -166,7 +165,6 @@ export default class StickerTools {
             .alias("删除分类")
             .option("force", "-f 强制删除，不确认")
             .action(async ({ session, options }, category) => {
-                if (!session || !options) return "会话不可用";
                 if (!category) return "请提供要删除的分类名";
 
                 // 获取分类中的表情包数量
@@ -178,7 +176,8 @@ export default class StickerTools {
                 // 非强制模式需要确认
                 if (!options.force) {
                     const messageId = await session.sendQueued(
-                        `⚠️ 确定要删除分类 "${category}" 吗？该分类下有 ${count} 个表情包！\n` + `回复 "确认删除" 来确认操作，或回复 "取消" 取消操作。`,
+                        `⚠️ 确定要删除分类 "${category}" 吗？该分类下有 ${count} 个表情包！\n` +
+                            `回复 "确认删除" 来确认操作，或回复 "取消" 取消操作。`
                     );
 
                     const response = await session.prompt(60000); // 60秒等待
@@ -228,7 +227,6 @@ export default class StickerTools {
             .option("all", "-a 发送该分类下所有表情包")
             .option("delay", "-d [delay:posint] 发送所有表情包时的延时 (毫秒), 默认为 500 毫秒")
             .action(async ({ session, options }, category, index) => {
-                if (!session || !options) return "会话不可用";
                 if (!category) return "请提供分类名称";
 
                 // 获取分类下所有表情包
@@ -309,8 +307,7 @@ export default class StickerTools {
             image_id: Schema.string().required().description("要偷取的表情图片ID"),
         }),
     })
-    async stealSticker({ image_id, session }: Infer<{ image_id: string }>) {
-        if (!session) return Failed("session 不可用");
+    async stealSticker({ image_id, session }: Infer<{ image_id: string }> & { session: Session }) {
         try {
             // 需要两份图片数据
             // 经过处理的，静态的图片供LLM分析
@@ -336,7 +333,6 @@ export default class StickerTools {
         }),
     })
     async sendRandomSticker({ session, category }: Infer<{ category: string }>) {
-        if (!session) return Failed("session 不可用");
         try {
             const sticker = await this.stickerService.getRandomSticker(category);
 

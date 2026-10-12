@@ -106,7 +106,7 @@ interface RetryPolicy {
  */
 export interface ConfigV200 {
     providers: ProviderConfig[];
-    modelGroups: Array<{ name: string; models: ModelDescriptor[]; strategy: ModelSwitchingStrategy }>;
+    modelGroups: { name: string; models: ModelDescriptor[]; strategy: ModelSwitchingStrategy }[];
     task: {
         chat: string;
         embed: string;

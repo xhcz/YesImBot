@@ -1,7 +1,6 @@
-import { Context } from "koishi";
-
-import { StorageDriver } from "../types";
-import { LocalStorageDriver } from "./local";
+import { Context } from 'koishi';
+import { StorageDriver } from '../types';
+import { LocalStorageDriver } from './local';
 
 /**
  * 存储驱动工厂
@@ -12,7 +11,7 @@ export class StorageDriverFactory {
      */
     static create(ctx: Context, type: string, config: any): StorageDriver {
         switch (type) {
-            case "local":
+            case 'local':
                 return new LocalStorageDriver(ctx, config);
             default:
                 throw new Error(`Unsupported storage driver type: ${type}`);
@@ -23,8 +22,8 @@ export class StorageDriverFactory {
      * 获取支持的驱动类型列表
      */
     static getSupportedTypes(): string[] {
-        return ["local"];
+        return ['local'];
     }
 }
 
-export { LocalStorageDriver } from "./local";
+export { LocalStorageDriver };

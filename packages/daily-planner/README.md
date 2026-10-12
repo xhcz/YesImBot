@@ -23,7 +23,6 @@ bun build
 ```
 
 ## 打包
-
 ```
 bun pack
 ```

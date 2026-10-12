@@ -1,6 +1,6 @@
 import { Bot, Context, Logger, Session } from "koishi";
 
-import { Services, TableName } from "../../shared/constants";
+import { Services, TableName } from "@/shared/constants";
 import { HistoryConfig } from "./config";
 import { InteractionManager } from "./interaction-manager";
 import { SemanticMemoryManager } from "./l2-semantic-memory";
@@ -16,14 +16,13 @@ export class ContextBuilder {
         private config: HistoryConfig,
         private interactionManager: InteractionManager,
         private l2Manager: SemanticMemoryManager,
-        private l3Manager: ArchivalMemoryManager,
+        private l3Manager: ArchivalMemoryManager
     ) {
         this.logger = ctx[Services.Logger].getLogger("[数据上下文构建器]");
     }
 
     public async build(session: Session): Promise<WorldState> {
-        const { platform, isDirect } = session;
-        const channelId = session.channelId!;
+        const { platform, channelId, isDirect } = session;
 
         const raw_l1_history = await this.interactionManager.getL1History(platform, channelId, this.config.l1_memory.maxMessages, session.selfId);
 
@@ -33,7 +32,7 @@ export class ContextBuilder {
 
         const { processed_events, new_events } = this.partitionL1History(session.selfId, l1_history);
 
-        let l2_retrieved_memories: RetrievedMemoryChunk[] = [];
+        let l2_retrieved_memories = [];
         if (isL1Overloaded) {
             const earliestMessageTimestamp = raw_l1_history
                 .filter((e) => e.type === "message")
@@ -60,20 +59,20 @@ export class ContextBuilder {
         const channelInfo = await this.getChannelInfo(session);
         const selfInfo = await this.getSelfInfo(session);
 
-        const users: NonNullable<WorldState["users"]> = [];
+        const users = [];
 
         if (isDirect) {
             users.push({
-                id: session.userId ?? "",
-                name: session.author?.name ?? "",
+                id: session.userId,
+                name: session.author.name,
             });
             users.push({
                 id: session.selfId,
-                name: selfInfo.name ?? "",
+                name: selfInfo.name,
                 roles: ["self"],
             });
         } else {
-            let selfInGuild: Awaited<ReturnType<Bot["getGuildMember"]>> | undefined;
+            let selfInGuild: Awaited<ReturnType<Bot["getGuildMember"]>>;
             try {
                 if (session.guildId) selfInGuild = await session.bot.getGuildMember(session.guildId, session.selfId);
             } catch (error) {
@@ -82,16 +81,16 @@ export class ContextBuilder {
 
             users.push({
                 id: session.selfId,
-                name: selfInGuild?.nick || selfInGuild?.name || selfInfo.name || "",
-                roles: ["self", ...(selfInGuild?.roles || []).map((role) => (typeof role === "string" ? role : role.id))],
+                name: selfInGuild?.nick || selfInGuild?.name || selfInfo.name,
+                roles: ["self", ...(selfInGuild?.roles || []).map(role => typeof role === "string" ? role : role.id)],
             });
 
             l1_history.forEach((item) => {
                 if (item.type === "message") {
                     if (!users.find((u) => u.id === item.sender.id)) {
                         users.push({
-                            id: item.sender.id ?? "",
-                            name: item.sender.name ?? "",
+                            id: item.sender.id,
+                            name: item.sender.name,
                             roles: item.sender.roles,
                         });
                     }
@@ -102,7 +101,7 @@ export class ContextBuilder {
         const worldState: WorldState = {
             channel: {
                 id: channelId,
-                name: channelInfo.name ?? "",
+                name: channelInfo.name,
                 type: session.isDirect ? "private" : "guild",
                 platform: platform,
             },
@@ -156,7 +155,7 @@ export class ContextBuilder {
 
     private async retrieveL2Memories(
         new_events: L1HistoryItem[],
-        filter?: { platform?: string; channelId?: string; k?: number; startTimestamp?: Date; endTimestamp?: Date },
+        filter?: { platform?: string; channelId?: string; k?: number; startTimestamp?: Date; endTimestamp?: Date }
     ): Promise<RetrievedMemoryChunk[]> {
         if (!this.config.l2_memory.enabled || new_events.length === 0) return [];
 
@@ -183,10 +182,7 @@ export class ContextBuilder {
                 relevance: chunk.similarity,
                 timestamp: chunk.startTimestamp,
             }));
-        } catch (error) {
-            this.logger.warn(`L2 记忆检索失败: ${error instanceof Error ? error.message : String(error)}`);
-            return [];
-        }
+        } catch (error) {}
     }
 
     private async retrieveL3Memories(platform: string, channelId: string): Promise<DiaryEntryData[]> {
@@ -199,13 +195,13 @@ export class ContextBuilder {
 
     private async getChannelInfo(session: Session) {
         const { isDirect, channelId } = session;
-        let channelInfo: Awaited<ReturnType<Bot["getChannel"]>> | undefined;
+        let channelInfo: Awaited<ReturnType<Bot["getChannel"]>>;
         let channelName = "";
 
         if (isDirect) {
-            let userInfo: Awaited<ReturnType<Bot["getUser"]>> | undefined;
+            let userInfo: Awaited<ReturnType<Bot["getUser"]>>;
             try {
-                userInfo = await session.bot.getUser(session.userId!);
+                userInfo = await session.bot.getUser(session.userId);
             } catch (error) {
                 this.logger.debug(`获取用户信息失败 for user ${session.userId}: ${error.message}`);
             }
@@ -213,8 +209,8 @@ export class ContextBuilder {
             channelName = `与 ${userInfo?.name || session.userId} 的私聊`;
         } else {
             try {
-                channelInfo = await session.bot.getChannel(channelId!);
-                channelName = channelInfo?.name ?? "";
+                channelInfo = await session.bot.getChannel(channelId);
+                channelName = channelInfo.name;
             } catch (error) {
                 this.logger.debug(`获取频道信息失败 for channel ${channelId}: ${error.message}`);
             }
@@ -228,10 +224,10 @@ export class ContextBuilder {
         const { selfId } = session;
         try {
             const user = await session.bot.getUser(selfId);
-            return { id: selfId, name: user.name ?? "" };
+            return { id: selfId, name: user.name };
         } catch (error) {
             this.logger.debug(`获取机器人自身信息失败 for id ${selfId}: ${error.message}`);
-            return { id: selfId, name: session.bot.user?.name || "Self" };
+            return { id: selfId, name: session.bot.user.name || "Self" };
         }
     }
 

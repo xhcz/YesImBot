@@ -1,10 +1,8 @@
 // src/services/asset/drivers/local.ts
 
 import { promises as fs, Stats } from "fs";
-import path from "path";
-
 import { Context, Logger } from "koishi";
-
+import path, { resolve } from "path";
 import { StorageDriver, FileStats } from "../types";
 
 /**
@@ -16,7 +14,7 @@ export class LocalStorageDriver implements StorageDriver {
 
     constructor(
         private readonly ctx: Context,
-        public readonly baseDir: string,
+        public readonly baseDir: string
     ) {
         this.logger = ctx.logger("[本地存储驱动]");
     }
@@ -36,7 +34,7 @@ export class LocalStorageDriver implements StorageDriver {
     }
 
     public getPath(id: string): string {
-        return path.resolve(this.baseDir, id);
+        return resolve(this.baseDir, id);
     }
 
     async write(id: string, buffer: Buffer): Promise<void> {

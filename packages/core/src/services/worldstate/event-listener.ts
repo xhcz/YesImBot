@@ -1,8 +1,8 @@
 import { Argv, Context, Logger, Random, Session } from "koishi";
 import type { Universal } from "koishi";
 
-import { Services, TableName } from "../../shared/constants";
-import { truncate } from "../../shared/utils";
+import { Services, TableName } from "@/shared/constants";
+import { truncate } from "@/shared/utils";
 import { AssetService } from "../assets";
 import { HistoryConfig } from "./config";
 import { WorldStateService } from "./service";
@@ -17,7 +17,7 @@ interface PendingCommand {
 }
 
 export class EventListenerManager {
-    private readonly disposers: Array<() => boolean> = [];
+    private readonly disposers: (() => boolean)[] = [];
     private readonly pendingCommands = new Map<string, PendingCommand[]>();
     private cleanupTimer?: () => void;
     private generation = 0;
@@ -27,7 +27,7 @@ export class EventListenerManager {
     constructor(
         private ctx: Context,
         private service: WorldStateService,
-        private config: HistoryConfig,
+        private config: HistoryConfig
     ) {
         this.logger = ctx[Services.Logger].getLogger("[世界状态]");
         this.assetService = ctx[Services.Asset];
@@ -81,10 +81,15 @@ export class EventListenerManager {
                 await this.recordUserMessage(session);
                 const result = await next();
 
-                if (result === undefined && !(session as any)["__commandHandled"]) {
+                if (result === undefined && !session["__commandHandled"]) {
                     // 等待所有前置处理结束；单个插件失败不能提前触发回复。
-                    const hooks = this.ctx.lifecycle.filterHooks(this.ctx.lifecycle._hooks["yesimbot/before-user-stimulus"] || [], session);
-                    const results = await Promise.allSettled(hooks.map((hook) => Promise.resolve().then(() => hook.callback.call(session, session))));
+                    const hooks = this.ctx.lifecycle.filterHooks(
+                        this.ctx.lifecycle._hooks["yesimbot/before-user-stimulus"] || [],
+                        session
+                    );
+                    const results = await Promise.allSettled(
+                        hooks.map((hook) => Promise.resolve().then(() => hook.callback.call(session, session)))
+                    );
                     for (const result of results) {
                         if (result.status === "rejected") this.logger.error("用户消息前置处理失败", result.reason);
                     }
@@ -93,19 +98,19 @@ export class EventListenerManager {
                         channelCid: session.cid,
                         session,
                         priority: 5, // Normal message priority
-                        payload: { messageIds: [session.messageId!] },
+                        payload: { messageIds: [session.messageId] },
                     };
                     this.ctx.emit("agent/stimulus", stimulus);
                 }
                 return result;
-            }),
+            })
         );
 
         this.disposers.push(
             this.ctx.on("command/before-execute", (argv) => {
-                (argv.session! as any)["__commandHandled"] = true;
+                argv.session["__commandHandled"] = true;
                 return this.handleCommandInvocation(argv);
-            }),
+            })
         );
 
         this.disposers.push(this.ctx.on("before-send", (session, options) => this.matchCommandResult(session, options), true));
@@ -118,7 +123,7 @@ export class EventListenerManager {
                     if (this.config.ignoreSelfMessage) return;
                     this.handleOperatorMessage(session);
                 }
-            }),
+            })
         );
 
         this.disposers.push(
@@ -128,7 +133,7 @@ export class EventListenerManager {
                 if (session.type === "notice" && session.platform == "onebot") return this.handleNotice(session);
                 if (session.type === "guild-member" && session.platform == "onebot") return this.handleGuildMember(session);
                 if (session.type === "message-deleted") return this.handleMessageDeleted(session);
-            }),
+            })
         );
     }
 
@@ -158,8 +163,6 @@ export class EventListenerManager {
                 } as SystemEventData);
 
                 break;
-            default:
-                break;
         }
     }
 
@@ -180,7 +183,13 @@ export class EventListenerManager {
         const released = raw?.sub_type === "lift_ban" || duration === 0;
         const timestamp = new Date();
         const isTargetingBot = userId === selfId;
-        const type = allMembers ? (released ? "guild-all-member-unban" : "guild-all-member-ban") : released ? "guild-member-unban" : "guild-member-ban";
+        const type = allMembers
+            ? released
+                ? "guild-all-member-unban"
+                : "guild-all-member-ban"
+            : released
+              ? "guild-member-unban"
+              : "guild-member-ban";
         const payload: Partial<SystemEventData> = {
             type,
             payload: {
@@ -200,7 +209,7 @@ export class EventListenerManager {
 
         if (allMembers) {
             await this.service.updateMuteStatus(session.cid, released ? 0 : Infinity, selfId, "all");
-        } else if (isTargetingBot || this.ctx.bots.some((bot) => bot.platform === session.platform && bot.selfId === userId)) {
+        } else if (isTargetingBot || this.ctx.bots.some(bot => bot.platform === session.platform && bot.selfId === userId)) {
             await this.service.updateMuteStatus(session.cid, released ? 0 : timestamp.getTime() + duration, userId);
         }
         await this.service.recordSystemEvent({
@@ -236,7 +245,7 @@ export class EventListenerManager {
 
     private async handleCommandInvocation(argv: Argv): Promise<void> {
         const { session, command, source } = argv;
-        if (!session || !command) return;
+        if (!session) return;
         const generation = this.generation;
 
         this.logger.info(`记录指令调用 | 用户: ${session.author.name || session.userId} | 指令: ${command.name} | 频道: ${session.cid}`);
@@ -245,16 +254,14 @@ export class EventListenerManager {
         const eventPayload: SystemEventData = {
             id: commandEventId,
             platform: session.platform,
-            channelId: session.channelId!,
+            channelId: session.channelId,
             channelType: session.isDirect ? "private" : "guild",
             type: "command-invoked",
             timestamp: new Date(),
             payload: {
                 actor: `user:${session.platform}:${session.userId}`,
                 authority: (session.user as any)?.authority ?? null,
-                operation: command.name,
-                status: "invoked",
-                scope: "channel",
+                operation: command.name, status: "invoked", scope: "channel",
                 origin: { platform: session.platform, selfId: session.selfId, adapter: session.bot?.platform, channelId: session.channelId },
                 target: { platform: session.platform, selfId: session.selfId, channelId: session.channelId },
                 invokedAt: new Date().toISOString(),
@@ -273,8 +280,8 @@ export class EventListenerManager {
         const pendingList = this.pendingCommands.get(key) || [];
         pendingList.push({
             commandEventId,
-            scope: session.scope ?? "",
-            invokerId: session.userId ?? "",
+            scope: session.scope,
+            invokerId: session.userId,
             timestamp: Date.now(),
             session,
         });
@@ -295,7 +302,7 @@ export class EventListenerManager {
 
         // command scope 是固定作用域；真实编码器通过 options.session 传递调用者。
         // 同一个 Session 并发执行同名命令仍有歧义，宁可不关联也不能猜测 FIFO。
-        const candidates = pendingInChannel.filter((p) => p.session === options.session && p.scope === session.scope);
+        const candidates = pendingInChannel.filter(p => p.session === options.session && p.scope === session.scope);
         if (candidates.length !== 1) return;
         const pendingIndex = pendingInChannel.indexOf(candidates[0]);
 
@@ -313,7 +320,7 @@ export class EventListenerManager {
     private async recordUserMessage(session: Session): Promise<void> {
         await this.service.observeChannel(session);
         /* prettier-ignore */
-        this.logger.info(`用户消息 | ${session.author.name} | 频道: ${session.cid} | 内容: ${truncate(session.content ?? "").replace(/\n/g, " ")}`);
+        this.logger.info(`用户消息 | ${session.author.name} | 频道: ${session.cid} | 内容: ${truncate(session.content).replace(/\n/g, " ")}`);
 
         if (session.guildId) {
             await this.updateMemberInfo(session);
@@ -321,16 +328,16 @@ export class EventListenerManager {
 
         // 使用原生序列化还原被分离到 session.quote 的引用元素。
         const messageContent = session.toJSON().message?.content ?? session.content;
-        const content = await this.assetService.transform(messageContent ?? "");
+        const content = await this.assetService.transform(messageContent);
         this.logger.debug(`记录转义后的消息：${content}`);
 
         const message: MessageData = {
-            id: session.messageId!,
+            id: session.messageId,
             platform: session.platform,
-            channelId: session.channelId!,
+            channelId: session.channelId,
             channelType: session.isDirect ? "private" : "guild",
             sender: {
-                id: session.userId ?? "",
+                id: session.userId,
                 name: session.author.nick || session.author.name,
                 roles: roleIds(session.author.roles),
             },
@@ -350,9 +357,9 @@ export class EventListenerManager {
         const message: MessageData = {
             id: session.messageId,
             platform: session.platform,
-            channelId: session.channelId!,
+            channelId: session.channelId,
             channelType: session.isDirect ? "private" : "guild",
-            sender: { id: session.bot.selfId, name: session.bot.user?.nick || session.bot.user?.name || "" },
+            sender: { id: session.bot.selfId, name: session.bot.user.nick || session.bot.user.name },
             content: await this.assetService.transform(session.toJSON().message?.content ?? session.content),
             timestamp: new Date(session.timestamp),
             quoteId: session.quote?.id,
@@ -386,6 +393,6 @@ export class EventListenerManager {
 // #endregion
 
 /** 兼容旧适配器的角色 ID 数组及新版 Satori 的角色对象数组。 */
-function roleIds(roles?: ReadonlyArray<string | { id: string }>): string[] | undefined {
-    return roles?.map((role) => (typeof role === "string" ? role : role.id));
+function roleIds(roles?: readonly (string | { id: string })[]): string[] | undefined {
+    return roles?.map(role => typeof role === "string" ? role : role.id);
 }

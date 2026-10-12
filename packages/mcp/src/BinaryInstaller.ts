@@ -1,6 +1,5 @@
 import fs from "fs/promises";
 import path from "path";
-
 import { FileManager } from "./FileManager";
 import { GitHubAPI } from "./GitHubAPI";
 import { Logger } from "./Logger";
@@ -15,7 +14,14 @@ export class BinaryInstaller {
     private dataDir: string;
     private cacheDir: string;
 
-    constructor(logger: Logger, systemUtils: SystemUtils, fileManager: FileManager, githubAPI: GitHubAPI, dataDir: string, cacheDir: string) {
+    constructor(
+        logger: Logger,
+        systemUtils: SystemUtils,
+        fileManager: FileManager,
+        githubAPI: GitHubAPI,
+        dataDir: string,
+        cacheDir: string
+    ) {
         this.logger = logger;
         this.systemUtils = systemUtils;
         this.fileManager = fileManager;
@@ -36,7 +42,7 @@ export class BinaryInstaller {
         // 解析版本号
         let targetVersion = version;
         if (version === "latest") {
-            targetVersion = (await this.githubAPI.getLatestVersion("astral-sh", "uv")) ?? version;
+            targetVersion = await this.githubAPI.getLatestVersion("astral-sh", "uv");
             if (!targetVersion) {
                 this.logger.error("无法获取 UV 最新版本");
                 return null;
@@ -91,7 +97,7 @@ export class BinaryInstaller {
         // 解析版本号
         let targetVersion = version;
         if (version === "latest") {
-            targetVersion = (await this.githubAPI.getLatestVersion("oven-sh", "bun")) ?? version;
+            targetVersion = await this.githubAPI.getLatestVersion("oven-sh", "bun");
             if (!targetVersion) {
                 this.logger.error("无法获取 Bun 最新版本");
                 return null;

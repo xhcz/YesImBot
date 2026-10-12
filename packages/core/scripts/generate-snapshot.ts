@@ -1,6 +1,5 @@
 import { writeFileSync } from "fs";
 import path from "path";
-
 //@ts-ignore
 import { Project, PropertySignature } from "ts-morph";
 

@@ -1,6 +1,5 @@
 import { execSync } from "child_process";
 import fs from "fs/promises";
-
 import { PlatformMapping } from "./Config";
 import { Logger } from "./Logger";
 

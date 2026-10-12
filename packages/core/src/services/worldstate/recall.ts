@@ -1,7 +1,6 @@
 import type { Context } from "koishi";
-
-import { TableName } from "../../shared/constants";
 import { diaryDateKey } from "./memory-date";
+import { TableName } from "../../shared/constants";
 export interface StoredMemory {
     id: string;
     kind: "l2" | "l3";
@@ -15,7 +14,7 @@ export interface StoredMemory {
 }
 export interface StoredRecallOptions {
     query: string;
-    targets: Array<{ platform: string; channelId: string }>;
+    targets: { platform: string; channelId: string }[];
     start?: number;
     end?: number;
     limit?: number;
@@ -23,7 +22,8 @@ export interface StoredRecallOptions {
 }
 /** Explicit, bounded old-memory lookup; it never broadens an empty target set. */
 export async function recallStoredMemories(db: Context["database"], options: StoredRecallOptions): Promise<StoredMemory[]> {
-    if (typeof options.query !== "string" || !options.query.trim() || options.query.length > 160) throw new Error("回忆关键词须为 1–160 字");
+    if (typeof options.query !== "string" || !options.query.trim() || options.query.length > 160)
+        throw new Error("回忆关键词须为 1–160 字");
     if (
         [options.start, options.end].some((n) => n !== undefined && !Number.isFinite(n)) ||
         (options.start !== undefined && options.end !== undefined && options.start > options.end)
@@ -36,8 +36,10 @@ export async function recallStoredMemories(db: Context["database"], options: Sto
     const tokens = [
         ...new Set(
             words.flatMap((w) =>
-                /^[\u3400-\u9fff]+$/.test(w) && w.length > 2 ? [w, ...Array.from({ length: w.length - 1 }, (_, i) => w.slice(i, i + 2))] : [w],
-            ),
+                /^[\u3400-\u9fff]+$/.test(w) && w.length > 2
+                    ? [w, ...Array.from({ length: w.length - 1 }, (_, i) => w.slice(i, i + 2))]
+                    : [w]
+            )
         ),
     ].slice(0, 24);
     const pattern = new RegExp(tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "i");
@@ -57,7 +59,7 @@ export async function recallStoredMemories(db: Context["database"], options: Sto
                     ...(options.start !== undefined ? { endTimestamp: { $gte: new Date(options.start) } } : {}),
                     ...(options.end !== undefined ? { startTimestamp: { $lte: new Date(options.end) } } : {}),
                 },
-                { limit: 50, sort: { endTimestamp: "desc" } },
+                { limit: 50, sort: { endTimestamp: "desc" } }
             ),
             db.get(
                 TableName.L3Diaries,
@@ -72,7 +74,7 @@ export async function recallStoredMemories(db: Context["database"], options: Sto
                           }
                         : {}),
                 },
-                { limit: 50, sort: { date: "desc" } },
+                { limit: 50, sort: { date: "desc" } }
             ),
         ]);
         for (const entry of [
