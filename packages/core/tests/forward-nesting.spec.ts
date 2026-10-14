@@ -1,14 +1,13 @@
 import { test, expect } from "vitest";
 
-import InteractionsExtension from "../src/services/extension/builtin/interactions";
-import { Services } from "../src/shared/constants";
+import InteractionsExtension from "../src/extension/builtin/interactions";
 const text = (text: string) => ({ type: "text", data: { text } });
 const forward = (id: string) => ({ type: "forward", data: { id } });
 const node = (...content: any[]) => ({ sender: { user_id: 1, nickname: "A" }, content });
 async function read(payloads: Record<string, unknown>, transform?: (elements: any[]) => Promise<string>) {
     const calls: string[] = [];
     const extension = Object.create(InteractionsExtension.prototype);
-    extension.ctx = { logger: { error() {}, debug() {} }, [Services.Asset]: { transform: transform ?? (async (elements: any[]) => elements.join("")) } };
+    extension.ctx = { logger: { error() {}, debug() {} }, yesimbot: { asset: { transform: transform ?? (async (elements: any[]) => elements.join("")) } } };
     const result = await extension.getForwardMsg({
         id: "root",
         session: {

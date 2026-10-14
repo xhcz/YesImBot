@@ -5,15 +5,15 @@ import path from "node:path";
 
 import { test } from "vitest";
 
-import { getContextSnapshots } from "../src/services/model/context-snapshot";
-import { getUsageLedger, observeUsageFetch } from "../src/services/model/usage";
+import { getContextSnapshots } from "../src/model/context-snapshot";
+import { getUsageLedger, observeUsageFetch } from "../src/model/usage";
 
 test("explicit telemetry owner avoids model service lookup and shares history/reset across contexts", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "yib-owner-"));
     let lookups = 0;
     const context = (key: string): any => {
         const ctx = { baseDir: dir, scope: { key }, logger: () => ({ warn() {} }) };
-        Object.defineProperty(ctx, "yesimbot.model", {
+        Object.defineProperty(ctx, "yesimbot", {
             get() {
                 lookups++;
                 return undefined;
@@ -49,18 +49,17 @@ test("explicit telemetry owner avoids model service lookup and shares history/re
     }
 });
 
-import { ChatModel } from "../src/services/model/chat-model";
-import { ModelAbility } from "../src/services/model/config";
-import { EmbedModel } from "../src/services/model/embed-model";
-import { EvaluationModel } from "../src/services/model/evaluation-model";
-import { ProviderInstance } from "../src/services/model/provider-instance";
-import { Services } from "../src/shared/constants";
+import { ChatModel } from "../src/model/chat-model";
+import { ModelAbility } from "../src/model/config";
+import { EmbedModel } from "../src/model/embed-model";
+import { EvaluationModel } from "../src/model/evaluation-model";
+import { ProviderInstance } from "../src/model/provider-instance";
 
 test("provider-created chat, embedding and evaluation transports retain the explicit instance owner", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "yib-model-owner-"));
     const logger = { debug() {}, info() {}, warn() {}, error() {}, success() {} };
-    const ctx: any = { baseDir: dir, scope: { key: "owner-models" }, [Services.Logger]: { getLogger: () => logger } };
-    Object.defineProperty(ctx, Services.Model, {
+    const ctx: any = { baseDir: dir, scope: { key: "owner-models" }, logger: () => logger };
+    Object.defineProperty(ctx, "yesimbot", {
         get() {
             throw new Error("undeclared model lookup");
         },
@@ -68,7 +67,7 @@ test("provider-created chat, embedding and evaluation transports retain the expl
     const owner = { context: ctx };
     const config: any = { modelId: "test", abilities: [ModelAbility.Chat, ModelAbility.Embedding, ModelAbility.Evaluation], parameters: { custom: [] } };
     const client: any = { chat() {}, embed() {}, evaluate() {} };
-    const provider: any = new ProviderInstance(ctx, { name: "test", models: [config] } as any, client, owner);
+    const provider: any = new ProviderInstance(ctx, { name: "test", models: [config] } as any, client, { getLogger: () => logger } as any, owner);
     provider.fetch = async () => new Response(JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 2 }, choices: [] }));
     try {
         const models = [provider.getChatModel("test"), provider.getEmbedModel("test"), provider.getEvaluationModel("test")];
