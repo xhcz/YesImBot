@@ -321,14 +321,15 @@ export class HistoryCommandManager {
 
                 const invalid = validateHistoryTargetOptions(options);
                 if (invalid) return invalid;
-                const targetsToProcess: Array<{ platform: string; channelId: string }> = [];
+                const targetsToProcess = new Map<string, { platform: string; channelId: string }>();
+                const addTarget = (platform: string, channelId: string) => targetsToProcess.set(JSON.stringify([platform, channelId]), { platform, channelId });
                 const ambiguousChannels: string[] = [];
 
                 if (options.target !== undefined) {
                     for (const value of splitHistoryTargets(options.target)) {
                         const target = parseHistoryTarget(value);
                         if (!target) return `目标格式应为 平台:频道ID。无法解析 "${value}"，未执行清理。`;
-                        targetsToProcess.push(target);
+                        addTarget(target.platform, target.channelId);
                     }
                 }
 
@@ -337,12 +338,12 @@ export class HistoryCommandManager {
                         .map((c) => c.trim())
                         .filter(Boolean)) {
                         if (options.platform) {
-                            targetsToProcess.push({ platform: options.platform, channelId });
+                            addTarget(options.platform, channelId);
                         } else {
                             const messages = await this.ctx.database.get(TableName.Messages, { channelId }, { fields: ["platform"] });
                             const platforms = [...new Set(messages.map((d) => d.platform))];
                             if (platforms.length === 0) results.push(`🟡 频道 "${channelId}" 未找到`);
-                            else if (platforms.length === 1) targetsToProcess.push({ platform: platforms[0], channelId });
+                            else if (platforms.length === 1) addTarget(platforms[0], channelId);
                             else ambiguousChannels.push(`频道 "${channelId}" 存在于多个平台: ${platforms.join(", ")}`);
                         }
                     }
@@ -350,15 +351,14 @@ export class HistoryCommandManager {
 
                 if (ambiguousChannels.length > 0) return `操作已中止:\n${ambiguousChannels.join("\n")}\n请使用 -p 或 -t 指定平台`;
 
-                if (targetsToProcess.length === 0 && !options.target && !options.channel) {
-                    if (session.platform && session.channelId)
-                        targetsToProcess.push({ platform: session.platform, channelId: conversationChannelId(session)! });
+                if (targetsToProcess.size === 0 && !options.target && !options.channel) {
+                    if (session.platform && session.channelId) addTarget(session.platform, conversationChannelId(session)!);
                     else return "无法确定当前会话，请使用选项指定频道";
                 }
 
-                if (targetsToProcess.length === 0 && results.length === 0) return "没有指定任何有效的清理目标";
+                if (targetsToProcess.size === 0 && results.length === 0) return "没有指定任何有效的清理目标";
 
-                for (const target of targetsToProcess) {
+                for (const target of targetsToProcess.values()) {
                     await performClear({ platform: target.platform, channelId: target.channelId }, `目标 "${target.platform}:${target.channelId}"`, target);
                 }
 

@@ -193,3 +193,9 @@ it("validates the entire clear target list before deleting any conversation", as
     expect(await invoke({ target: "onebot:group,qq:" })).toContain("目标格式");
     expect(removals).toHaveLength(0);
 });
+
+it("clears repeated targets only once", async () => {
+    const { invoke, removals } = await fixture();
+    await invoke({ target: "onebot:group,onebot:group" });
+    expect(removals.map(({ query }) => query)).toEqual(Array.from({ length: 4 }, () => ({ platform: "onebot", channelId: "group" })));
+});
