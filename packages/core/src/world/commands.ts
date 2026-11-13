@@ -38,6 +38,20 @@ function splitHistoryTargets(value: string): string[] {
     return result.filter(Boolean);
 }
 
+function validateHistoryTargetOptions(options: { platform?: string; channel?: string; target?: string }): string | undefined {
+    if (options.target !== undefined && (options.platform !== undefined || options.channel !== undefined)) return "-t 不能与 -p 或 -c 同时使用。";
+    if (options.platform !== undefined && options.channel === undefined) return "-p 需要与 -c 一起使用。";
+    if ([options.target, options.channel, options.platform].some((value) => value !== undefined && !value.trim())) return "目标参数不能为空。";
+}
+
+function parseHistoryTarget(value: string): { platform: string; channelId: string } | undefined {
+    const separator = value.indexOf(":");
+    if (separator < 1) return;
+    const platform = value.slice(0, separator).trim();
+    const channelId = value.slice(separator + 1).trim();
+    if (platform && channelId) return { platform, channelId };
+}
+
 /** 把召回结果按 3000 字一段发到当前会话。 */
 async function displayRecallResult(session: Session, result: unknown) {
     const text = Array.from(JSON.stringify(result, null, 2));
@@ -132,41 +146,20 @@ export class HistoryCommandManager {
             .option("platform", "-p <platform:string> 指定平台")
             .option("channel", "-c <channel:string> 指定频道ID")
             .option("target", "-t <target:string> 指定目标 'platform:channelId'")
-            .usage("默认统计当前会话保存的消息数量，不是 L1 实际窗口的长度。跨平台指定频道时请填写 -t 平台:频道ID，或同时填写 -p 平台与 -c 频道ID。")
+            .usage("默认统计当前会话保存的消息数量。指定其他会话时使用 -t 平台:频道ID，也可以使用 -p 平台与 -c 频道ID。")
             .example("history.count -t onebot:857518324")
             .action(async ({ session, options }) => {
                 if (!session || !options) return;
-                let platform = options.platform || session.platform;
-                let channelId = options.channel || conversationChannelId(session);
+                const invalid = validateHistoryTargetOptions(options);
+                if (invalid) return invalid;
+                const target = options.target !== undefined ? parseHistoryTarget(options.target) : undefined;
+                if (options.target !== undefined && !target) return "目标格式应为 平台:频道ID。";
+                const platform = target?.platform ?? options.platform ?? session.platform;
+                const channelId = target?.channelId ?? options.channel ?? conversationChannelId(session);
+                if (!platform || !channelId) return "无法确定当前会话，请使用 -t 指定目标。";
 
-                // 从 -t, --target 解析
-                if (options.target) {
-                    const parts = options.target.split(":");
-                    if (parts.length < 2) {
-                        return `❌❌ 格式错误的目标: "${options.target}"，已跳过`;
-                    }
-                    platform = parts[0];
-                    channelId = parts.slice(1).join(":");
-                }
-
-                if (channelId) {
-                    if (!platform) {
-                        const messages = await this.ctx.database.get(TableName.Messages, { channelId }, { fields: ["platform"] });
-                        const platforms = [...new Set(messages.map((d) => d.platform))];
-
-                        if (platforms.length === 0) return `🟡🟡🟡 频道 "${channelId}" 未找到任何历史记录，已跳过`;
-                        if (platforms.length === 1) platform = platforms[0];
-                        else
-                            /* prettier-ignore */
-                            return `❌❌ 频道 "${channelId}" 存在于多个平台: ${platforms.join(", ")}请使用 -p <platform> 来指定`;
-                    }
-
-                    // const messageCount = await this.ctx.database.eval(TableName.Messages, { platform, channelId }, (row) => row.count());
-                    const messageCount = await this.ctx.database.get(TableName.Messages, { platform, channelId }, { fields: ["id"] });
-
-                    /* prettier-ignore */
-                    return `在 ${platform}:${channelId} 中有 ${messageCount.length} 条消息，L1工作记忆中最多保留 ${this.config.l1_memory.maxMessages} 条`;
-                }
+                const messages = await this.ctx.database.get(TableName.Messages, { platform, channelId }, { fields: ["id"] });
+                return `在 ${platform}:${channelId} 中有 ${messages.length} 条消息，L1工作记忆中最多保留 ${this.config.l1_memory.maxMessages} 条`;
             });
 
         historyCmd
@@ -181,7 +174,8 @@ export class HistoryCommandManager {
 同一数据库中的消息、系统事件、L2记忆和L3日记按平台与频道共享，清除会影响共用这些历史的实例。
 全量清理同时重置回复意愿、取消旧回复与总结，并清除已接入的人物记忆；持久提醒和模型用量统计不在清理范围内。归属不明的旧Agent日志可能保留。
 
-当单独使用 -c 指定的频道ID存在于多个平台时，指令会要求您使用 -p 或 -t 来明确指定平台`,
+指定其他会话时优先使用 -t 平台:频道ID。-t 可以接受逗号分隔的多个目标，不能和 -p 或 -c 同时使用。
+使用 -c 且频道 ID 存在于多个平台时，请加上 -p 或改用 -t。`,
             )
             .example(
                 [
@@ -325,19 +319,16 @@ export class HistoryCommandManager {
                     return results.join("\n");
                 }
 
+                const invalid = validateHistoryTargetOptions(options);
+                if (invalid) return invalid;
                 const targetsToProcess: Array<{ platform: string; channelId: string }> = [];
                 const ambiguousChannels: string[] = [];
 
-                if (options.target) {
-                    for (const target of splitHistoryTargets(options.target)
-                        .map((t) => t.trim())
-                        .filter(Boolean)) {
-                        const parts = target.split(":");
-                        if (parts.length < 2) {
-                            results.push(`❌ 格式错误的目标: "${target}"`);
-                            continue;
-                        }
-                        targetsToProcess.push({ platform: parts[0], channelId: parts.slice(1).join(":") });
+                if (options.target !== undefined) {
+                    for (const value of splitHistoryTargets(options.target)) {
+                        const target = parseHistoryTarget(value);
+                        if (!target) return `目标格式应为 平台:频道ID。无法解析 "${value}"，未执行清理。`;
+                        targetsToProcess.push(target);
                     }
                 }
 
