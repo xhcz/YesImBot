@@ -249,7 +249,9 @@ export class HeartbeatProcessor {
 
         // 3. 渲染核心提示词文本
         this.logger.debug("步骤 3/4: 渲染提示词模板...");
+        let textToolSchemas = promptContext.toolSchemas;
         const render = async (worldState: FocusedWorldState) => {
+            view.TOOL_DEFINITION = view.NATIVE_TOOL_CALLING ? [] : prepareDataForTemplate(textToolSchemas);
             const { memoryBudgetReport, ...modelWorld } = projectWorldForModel(worldState).world as FocusedWorldState;
             modelWorld.conversationFocus = publicFocus as typeof focus;
             modelWorld.triggerContext = { ...modelWorld.triggerContext, conversationFocus: publicFocus };
@@ -348,10 +350,8 @@ export class HeartbeatProcessor {
 
         const attachedImageIds = this.contextBuilder.getAttachedImageIds?.(messages) ?? [];
         if (attachedImageIds.length) {
-            view.TOOL_DEFINITION = prepareDataForTemplate(
-                promptContext.toolSchemas.filter(
-                    (schema) => !this.toolService.getTool || !!this.toolService.getTool(schema.name, stimulus.session, { attachedImageIds }),
-                ),
+            textToolSchemas = promptContext.toolSchemas.filter(
+                (schema) => !this.toolService.getTool || !!this.toolService.getTool(schema.name, stimulus.session, { attachedImageIds }),
             );
             const filtered = await render(promptContext.worldState);
             messages[0].content = filtered.system;
