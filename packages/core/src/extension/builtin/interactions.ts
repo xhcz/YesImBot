@@ -106,18 +106,21 @@ export default class InteractionsExtension {
         name: "send_poke",
         description: `发送戳一戳、拍一拍消息，常用于指定你交流的对象，或提醒某位用户注意。`,
         parameters: withInnerThoughts({
-            user_id: Schema.string().required().description("用户名称"),
-            channel: Schema.string().description("要在哪个频道运行，不填默认为当前频道"),
+            user_id: Schema.string().required().description("用户账号 ID"),
+            guild_id: Schema.string().description("目标群组 ID，省略时使用当前群组"),
+            channel: Schema.string().hidden(),
         }),
         isSupported: (session) => session.platform === "onebot",
     })
-    async sendPoke({ session, user_id, channel }: Infer<{ user_id: string; channel: string }>) {
+    async sendPoke({ session, user_id, guild_id, channel }: Infer<{ user_id: string; guild_id?: string; channel?: string }>) {
         if (!session) return Failed("session 不可用");
         if (isEmpty(String(user_id))) return Failed("user_id is required");
-        const targetChannel = isEmpty(channel) ? session.channelId : channel;
+        if (!isEmpty(guild_id) && !isEmpty(channel) && guild_id !== channel) return Failed("guild_id 与旧参数 channel 指定了不同的群组");
+        const targetGuild = [guild_id, channel, session.guildId, session.isDirect ? undefined : session.channelId].find((id) => !isEmpty(id));
+        if (!targetGuild) return Failed("当前会话没有群组，请明确指定 guild_id");
         try {
             const result = await session.onebot!._request!("group_poke", {
-                group_id: targetChannel,
+                group_id: targetGuild,
                 user_id: Number(user_id),
             });
 

@@ -76,8 +76,8 @@ export default class SearchExtension {
             url: Schema.string().required().description("要获取的网页URL"),
             format: Schema.union(["html", "text"]).default("text").description("返回格式：html(原始HTML) 或 text(纯文本)"),
             max_length: Schema.number().default(5000).description("返回内容的最大长度，默认5000字符"),
-            include_links: Schema.boolean().default(true).description("是否包含网页中的其他链接"),
-            max_links: Schema.number().default(10).description("最多显示的链接数量，默认10个"),
+            max_links: Schema.number().min(0).step(1).default(10).description("最多返回的链接数量，默认 10；设为 0 时不返回链接"),
+            include_links: Schema.boolean().hidden(),
             use_dynamic: Schema.boolean().default(false).description("是否强制使用无头浏览器获取动态内容"),
         }),
         isSupported: (session) => {
@@ -90,7 +90,7 @@ export default class SearchExtension {
             url: string;
             format: "html" | "text";
             max_length: number;
-            include_links: boolean;
+            include_links?: boolean;
             max_links: number;
             use_dynamic: boolean;
         }>,
@@ -115,7 +115,8 @@ export default class SearchExtension {
             const useDynamicLoading = use_dynamic || this.config.usePuppeteer;
 
             // 使用统一的Puppeteer方法获取和解析内容
-            const { title, content, textContent, links } = await this._fetchAndExtractWithPuppeteer(url, useDynamicLoading, include_links ? max_links : 0);
+            const linkLimit = include_links === false ? 0 : max_links;
+            const { title, content, textContent, links } = await this._fetchAndExtractWithPuppeteer(url, useDynamicLoading, linkLimit);
 
             args.toolContext?.reportProgress?.("网页已读取，正在提取正文");
             let resultContent = format === "text" ? textContent : content;
@@ -132,7 +133,7 @@ export default class SearchExtension {
             let result = `网页标题: ${title}\n网页URL: ${url}\n内容:\n${resultContent}`;
 
             // 添加链接信息
-            if (include_links && links.length > 0) {
+            if (linkLimit > 0 && links.length > 0) {
                 result += `\n\n网页中的其他链接 (${links.length}个):\n`;
                 links.forEach((link, index) => {
                     result += `${index + 1}. ${link.text || "(无标题)"}\n   ${link.url}\n`;

@@ -167,7 +167,7 @@ export function Tool<TParams>(metadata: ToolMetadata<TParams>) {
 
 export function withInnerThoughts(params: { [T: string]: Schema<any> }): Schema<any> {
     return Schema.object({
-        inner_thoughts: Schema.string().description("Deep inner monologue private to you only."),
+        inner_thoughts: Schema.string().hidden(),
         ...params,
     });
 }
