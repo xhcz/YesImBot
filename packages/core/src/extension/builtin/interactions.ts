@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { Context, h, Schema } from "koishi";
+import { Context, h, Logger, Schema } from "koishi";
 import { CQCode } from "koishi-plugin-adapter-onebot";
 
 import { Extension, Tool, withInnerThoughts } from "../../extension/decorators";
@@ -28,6 +28,10 @@ export default class InteractionsExtension {
     static readonly Config = InteractionsConfigSchema;
     static readonly inject = ["yesimbot"];
 
+    private get logger(): Logger {
+        return this.ctx.yesimbot?.logging?.getLogger("[群内交互]") ?? this.ctx.logger;
+    }
+
     constructor(
         public ctx: Context,
         public config: InteractionsConfig,
@@ -52,10 +56,10 @@ export default class InteractionsExtension {
             });
 
             if ((result as any)["status"] === "failed") return Failed((result as any)["message"]);
-            this.ctx.logger.info(`Bot[${session.selfId}]对消息 ${message_id} 进行了表态： ${emoji_id}`);
+            this.logger.info(`Bot[${session.selfId}]对消息 ${message_id} 进行了表态： ${emoji_id}`);
             return Success(result);
         } catch (error) {
-            this.ctx.logger.error(`Bot[${session.selfId}]执行表态失败: ${message_id}, ${emoji_id} - `, error.message);
+            this.logger.error(`Bot[${session.selfId}]执行表态失败: ${message_id}, ${emoji_id} - `, error.message);
             return Failed(`对消息 ${message_id} 进行表态失败： ${error.message}`);
         }
     }
@@ -73,10 +77,10 @@ export default class InteractionsExtension {
         if (isEmpty(message_id)) return Failed("message_id is required");
         try {
             await session.onebot!.setEssenceMsg(message_id);
-            this.ctx.logger.info(`Bot[${session.selfId}]将消息 ${message_id} 设置为精华`);
+            this.logger.info(`Bot[${session.selfId}]将消息 ${message_id} 设置为精华`);
             return Success();
         } catch (error) {
-            this.ctx.logger.error(`Bot[${session.selfId}]设置精华消息失败: ${message_id} - `, error.message);
+            this.logger.error(`Bot[${session.selfId}]设置精华消息失败: ${message_id} - `, error.message);
             return Failed(`设置精华消息失败： ${error.message}`);
         }
     }
@@ -94,10 +98,10 @@ export default class InteractionsExtension {
         if (isEmpty(message_id)) return Failed("message_id is required");
         try {
             const result = await session.onebot!.deleteEssenceMsg(message_id);
-            this.ctx.logger.info(`Bot[${session.selfId}]将消息 ${message_id} 从精华中移除`);
+            this.logger.info(`Bot[${session.selfId}]将消息 ${message_id} 从精华中移除`);
             return Success();
         } catch (error) {
-            this.ctx.logger.error(`Bot[${session.selfId}]从精华中移除消息失败: ${message_id} - `, error.message);
+            this.logger.error(`Bot[${session.selfId}]从精华中移除消息失败: ${message_id} - `, error.message);
             return Failed(`从精华中移除消息失败： ${error.message}`);
         }
     }
@@ -123,10 +127,10 @@ export default class InteractionsExtension {
 
             if ((result as any)["status"] === "failed") return Failed((result as any)["data"]);
 
-            this.ctx.logger.info(`Bot[${session.selfId}]戳了戳 ${user_id}`);
+            this.logger.info(`Bot[${session.selfId}]戳了戳 ${user_id}`);
             return Success(result);
         } catch (error) {
-            this.ctx.logger.error(`Bot[${session.selfId}]戳了戳 ${user_id}，但是失败了 - `, error.message);
+            this.logger.error(`Bot[${session.selfId}]戳了戳 ${user_id}，但是失败了 - `, error.message);
             return Failed(`戳了戳 ${user_id} 失败： ${error.message}`);
         }
     }
@@ -257,7 +261,7 @@ export default class InteractionsExtension {
         } catch (error) {
             assertReplyTurn();
             const message = error instanceof Error ? error.message : String(error);
-            this.ctx.logger.error(`Bot[${session.selfId}]获取转发消息失败: ${id} - `, message);
+            this.logger.error(`Bot[${session.selfId}]获取转发消息失败: ${id} - `, message);
             return Failed(`获取转发消息失败： ${message}`);
         }
     }

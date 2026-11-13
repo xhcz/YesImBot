@@ -11,6 +11,7 @@ import { Properties, ToolSchema, ToolService } from "../extension";
 import { isReadOnlyTool } from "../extension/helpers";
 import { toolJSONSchema } from "../extension/json-schema";
 import type { LoggerService } from "../logger";
+import { withConversationLog } from "../logger/conversation";
 import { ChatModelSwitcher } from "../model";
 import type { ValidationOptions } from "../model/chat-model";
 import { withUsageScope } from "../model/usage";
@@ -91,8 +92,11 @@ export class HeartbeatProcessor {
             typeof decisionId === "string" && decisionId.length > 0 && decisionId.length <= 512 && !/\p{Cc}/u.test(decisionId) ? decisionId : uuidv4();
         try {
             const run = (current: AgentStimulus<any>) =>
-                withUsageScope({ traceId: turnId, platform: current.session.platform, botId: current.session.selfId, target: current.session.channelId }, () =>
-                    this.runTracedCycle(turnId, current),
+                withConversationLog(current.session, turnId, () =>
+                    withUsageScope(
+                        { traceId: turnId, platform: current.session.platform, botId: current.session.selfId, target: current.session.channelId },
+                        () => this.runTracedCycle(turnId, current),
+                    ),
                 );
             const memory = this.world?.l2_manager;
             if (!memory) return await run(stimulus);
@@ -126,7 +130,7 @@ export class HeartbeatProcessor {
             heartbeatCount++;
             try {
                 assertReplyTurn();
-                this.logger.info(`Heartbeat | 第 ${heartbeatCount}/${this.config.heartbeat} 轮`);
+                this.logger.debug(`回复轮次 · 第 ${heartbeatCount}/${this.config.heartbeat} 次模型决策`);
                 const onReplySent = () => {
                     success = true;
                 };
@@ -157,7 +161,7 @@ export class HeartbeatProcessor {
                 }
             } catch (error) {
                 if (isReplyTurnCancelled()) break;
-                handleError(this.logger, error, `Heartbeat #${heartbeatCount}`);
+                handleError(this.logger, error, `回复轮次 · 第 ${heartbeatCount} 次模型决策`);
                 shouldContinueHeartbeat = false;
             }
         }
@@ -172,7 +176,7 @@ export class HeartbeatProcessor {
         activeTurnId?: string,
     ): Promise<{ messages: Message[]; manualRecallIds: string[]; consumedSourceIds: string[]; fallbackMessages?: Message[] }> {
         // 1. 构建非消息部分的上下文
-        this.logger.debug("步骤 1/4: 构建提示词上下文...");
+        this.logger.debug("构建回复上下文");
         const promptContext = await this.contextBuilder.build(stimulus);
         assertReplyTurn();
         const focus = (promptContext.worldState as FocusedWorldState).conversationFocus ?? deriveConversationFocus(stimulus, promptContext.worldState);
@@ -191,7 +195,7 @@ export class HeartbeatProcessor {
         promptContext.worldState = initialWorld;
 
         // 2. 准备模板渲染所需的数据视图 (View)
-        this.logger.debug("步骤 2/4: 准备模板渲染视图...");
+        this.logger.debug("准备提示词渲染数据");
         const view = {
             session: stimulus.session,
             NATIVE_TOOL_CALLING: this.config.nativeToolCalling === true,
@@ -248,7 +252,7 @@ export class HeartbeatProcessor {
         };
 
         // 3. 渲染核心提示词文本
-        this.logger.debug("步骤 3/4: 渲染提示词模板...");
+        this.logger.debug("渲染提示词");
         const render = async (worldState: FocusedWorldState) => {
             const { memoryBudgetReport, ...modelWorld } = projectWorldForModel(worldState).world as FocusedWorldState;
             modelWorld.conversationFocus = publicFocus as typeof focus;
@@ -338,7 +342,7 @@ export class HeartbeatProcessor {
         const userPromptText = rendered.user;
 
         // 4. 条件化构建多模态上下文并组装最终的 messages
-        this.logger.debug("步骤 4/4: 构建最终消息...");
+        this.logger.debug("构建模型请求消息");
         const userMessageContent = await this.contextBuilder.buildMultimodalUserMessage(userPromptText, promptContext.worldState);
 
         const messages: Message[] = [
@@ -406,7 +410,7 @@ export class HeartbeatProcessor {
         const { messages, manualRecallIds, consumedSourceIds } = await this._prepareLlmRequest(stimulus, turnId);
 
         // 步骤 5: 调用LLM
-        this.logger.info("步骤 5/7: 调用大语言模型...");
+        this.logger.debug("调用主回复模型");
         assertReplyTurn();
         const llmRawResponse = await this.modelSwitcher.chat({
             requestPurpose: "主对话",
@@ -419,21 +423,20 @@ export class HeartbeatProcessor {
         this.contextBuilder.commitMultimodalUsage?.(messages);
         const prompt_tokens = llmRawResponse.usage?.prompt_tokens || `~${estimateTokensByRegex(messages.map((m) => m.content).join())}`;
         const completion_tokens = llmRawResponse.usage?.completion_tokens || `~${estimateTokensByRegex(llmRawResponse.text ?? "")}`;
-        this.logger.info(`💰 Token 消耗 | 输入: ${prompt_tokens} | 输出: ${completion_tokens}`);
+        this.logger.debug(`Token 用量 · 输入 ${prompt_tokens} · 输出 ${completion_tokens}`);
 
         // 步骤 6: 解析和验证响应
-        this.logger.debug("步骤 6/7: 解析并验证LLM响应...");
+        this.logger.debug("解析并校验模型输出");
         const agentResponseData = this.parseAndValidateResponse(llmRawResponse, conversationCid(session));
         if (!agentResponseData) {
-            this.logger.error("LLM响应解析或验证失败，终止本次心跳");
+            this.logger.error("模型输出解析或校验失败 · 结束本次模型决策");
             return null;
         }
 
-        this.displayThoughts(agentResponseData.thoughts);
         await this.interactionManager.recordThought(turnId, platform, channelId, agentResponseData.thoughts, manualRecallIds, consumedSourceIds);
 
         // 步骤 7: 执行动作
-        this.logger.debug(`步骤 7/7: 执行 ${agentResponseData.actions.length} 个动作...`);
+        this.logger.debug(`执行 ${agentResponseData.actions.length} 个动作`);
         const outcome = await this.executeActions(
             turnId,
             session,
@@ -443,8 +446,8 @@ export class HeartbeatProcessor {
         );
         const { replySent } = outcome;
 
-        if (replySent) this.logger.success("单次心跳成功完成");
-        else this.logger.debug("单次心跳完成，未成功发送回复");
+        if (replySent) this.logger.debug("本次模型决策已发送回复");
+        else this.logger.debug("本次模型决策结束 · 无已确认发送的回复");
         return { continue: !outcome.stop && (agentResponseData.request_heartbeat || outcome.retryRead), replySent };
     }
 
@@ -463,7 +466,7 @@ export class HeartbeatProcessor {
         // 步骤 1-4: 准备请求
         const { messages, manualRecallIds, consumedSourceIds } = await this._prepareLlmRequest(stimulus, turnId);
 
-        this.logger.info("步骤 5/7: 调用大语言模型...");
+        this.logger.debug("调用主回复模型");
         const stime = Date.now();
 
         interface ConsumerBatch {
@@ -490,10 +493,8 @@ export class HeartbeatProcessor {
             const controller = new AbortController();
             const id = batches.length + 1;
             const thoughtsPromise = (async () => {
-                for await (const chunk of parser.stream<any>("thoughts")) {
+                for await (const _ of parser.stream("thoughts")) {
                     if (controller.signal.aborted) break;
-                    const [key, value] = Object.entries(chunk)[0];
-                    this.logger.debug(`[流式思考 #${id}] 🤔 ${key}: ${value}`);
                 }
             })();
             const actionsPromise = (async () => {
@@ -507,7 +508,7 @@ export class HeartbeatProcessor {
             const heartbeatPromise = (async () => {
                 for await (const chunk of parser.stream<boolean>("request_heartbeat")) {
                     if (controller.signal.aborted) break;
-                    this.logger.debug(`[流式心跳 #${id}] ❤️ request_heartbeat: ${Boolean(chunk)}`);
+                    this.logger.debug(`[流式解析 #${id}] request_heartbeat: ${Boolean(chunk)}`);
                 }
             })();
             currentBatch = { parser, controller, promises: [thoughtsPromise, actionsPromise, heartbeatPromise] };
@@ -571,8 +572,8 @@ export class HeartbeatProcessor {
         await this.interactionManager.recordThought(turnId, platform, channelId, response.thoughts, manualRecallIds, consumedSourceIds);
         const outcome = await this.executeActions(turnId, session, response.actions, onReplySent, this.contextBuilder.getAttachedImageIds?.(messages) ?? []);
         const { replySent } = outcome;
-        if (replySent) this.logger.success("单次心跳成功完成");
-        else this.logger.debug("单次心跳完成，未成功发送回复");
+        if (replySent) this.logger.debug("本次模型决策已发送回复");
+        else this.logger.debug("本次模型决策结束 · 无已确认发送的回复");
         return { continue: !outcome.stop && (response.request_heartbeat || outcome.retryRead), replySent };
     }
 
@@ -681,7 +682,6 @@ export class HeartbeatProcessor {
                 }
                 const legacy = toolMarkup ? null : this.parseAndValidateResponse(response, conversationCid(session), false);
                 if (legacy) {
-                    this.displayThoughts(legacy.thoughts);
                     await this.interactionManager.recordThought(
                         turnId,
                         session.platform,
@@ -891,15 +891,6 @@ export class HeartbeatProcessor {
         }
     }
 
-    private displayThoughts(thoughts: AgentResponse["thoughts"]) {
-        if (!thoughts) return;
-        const { observe, analyze_infer, plan } = thoughts;
-        this.logger.info(`[思考过程]
-  - 观察: ${observe || "N/A"}
-  - 分析: ${analyze_infer || "N/A"}
-  - 计划: ${plan || "N/A"}`);
-    }
-
     private async executeActions(
         turnId: string,
         session: Session,
@@ -908,7 +899,7 @@ export class HeartbeatProcessor {
         attachedImageIds: readonly string[] = [],
     ): Promise<{ replySent: boolean; retryRead: boolean; stop: boolean }> {
         if (actions.length === 0) {
-            this.logger.info("无动作需要执行");
+            this.logger.debug("无动作需要执行");
             return { replySent: false, retryRead: false, stop: false };
         }
 

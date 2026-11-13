@@ -140,7 +140,13 @@ export class ChatModel extends BaseModel implements IChatModel {
         const budget = budgetContext(chatOptions, capacity);
         chatOptions.messages = budget.messages;
 
-        this.logger.info(`🚀 [请求开始] [${requestId}] [${useStream ? "流式" : "非流式"}] 模型: ${this.id} | 用途: ${options.requestPurpose ?? "未标注"}`);
+        const imageCount = budget.messages.reduce(
+            (sum, message) => sum + (Array.isArray(message.content) ? message.content.filter((part) => part.type === "image_url").length : 0),
+            0,
+        );
+        this.logger.info(
+            `[${requestId}] 模型请求 · ${useStream ? "流式" : "非流式"} · ${options.requestPurpose ?? "用途未标注"}${imageCount ? ` · 附带 ${imageCount} 张图片` : ""}`,
+        );
 
         try {
             return await withUsageScope({ contextBudget: budget.report }, () =>
@@ -257,7 +263,7 @@ export class ChatModel extends BaseModel implements IChatModel {
         const logMessage = result.toolCalls?.length
             ? `工具调用: "${result.toolCalls.map((tc) => tc.toolName).join(", ")}"`
             : `文本长度: ${result.text?.length ?? 0}`;
-        this.logger.success(`✅ [传输完成] [${requestId}] [非流式] ${logMessage} | 耗时: ${duration}ms | 结束原因: ${result.finishReason ?? "未知"}`);
+        this.logger.debug(`[传输完成] [${requestId}] [非流式] ${logMessage} | 耗时: ${duration}ms | 结束原因: ${result.finishReason ?? "未知"}`);
         return result;
     }
 
@@ -290,7 +296,7 @@ export class ChatModel extends BaseModel implements IChatModel {
             if (streamStarted) return;
             onStreamStart?.();
             streamStarted = true;
-            this.logger.debug(`🌊 流式传输已开始 | 延迟: ${Date.now() - stime}ms`);
+            this.logger.debug(`[${requestId}] 首次有效输出 · ${Date.now() - stime}ms`);
         };
         const originalFetch = chatOptions.fetch as (url: any, init: any) => Promise<Response>;
         const streamOptions = {
@@ -331,7 +337,8 @@ export class ChatModel extends BaseModel implements IChatModel {
                     if (validationResult.parsedData) finalContentParts.splice(0, finalContentParts.length, JSON.stringify(validationResult.parsedData));
                 }, markStreamStarted));
                 diagnostics.recordResponse(response);
-                this.logger.debug(`[${requestId}] HTTP 响应 | ${JSON.stringify(diagnostics.summary())}`);
+                const headers = diagnostics.summary();
+                this.logger.debug(`[${requestId}] HTTP 响应头 · ${response.status} · ${headers.contentType ?? "无 Content-Type"} · ${headers.headersMs}ms`);
                 if (response.ok) {
                     const contentType = response.headers.get("content-type");
                     // 缺少类型头时保留原有兼容行为；明确返回其他格式时不能静默判空。
@@ -461,7 +468,7 @@ export class ChatModel extends BaseModel implements IChatModel {
                 })();
             }
         } catch (error) {
-            this.logger.debug(`[${requestId}] 流式异常 | 类型: ${error.name} | ${JSON.stringify(diagnostics.summary())}`);
+            this.logger.debug(`[${requestId}] 流式异常 · ${error.name}`);
             const summary = diagnostics.summary();
             if (!(error instanceof AppError) && (summary.errorFrames || summary.malformedFrames)) {
                 throw new AppError(ErrorDefinitions.LLM.REQUEST_FAILED, {
@@ -474,13 +481,11 @@ export class ChatModel extends BaseModel implements IChatModel {
         } finally {
             const summary = diagnostics.summary();
             this.logger.debug(
-                `[${requestId}] 响应概况 | 耗时: ${summary.elapsedMs}ms | 首包: ${summary.firstChunkMs ?? "未知"}ms | 正文: ${summary.contentChars}字 | 推理: ${summary.reasoningChars}字 | 结束原因: ${summary.finishReason ?? "未知"} | 结束帧: ${summary.done ? "已收到" : "未收到"}`,
+                `[${requestId}] SSE 统计 · 首块数据 ${summary.firstChunkMs == null ? "未收到" : `${summary.firstChunkMs}ms`} · ${JSON.stringify(summary)}`,
             );
-            this.logger.debug(`[${requestId}] 流式汇总 | ${JSON.stringify(summary)}`);
         }
 
         chatOptions.abortSignal?.throwIfAborted();
-        const duration = Date.now() - stime;
         const finalText = finalContentParts.join("");
 
         if (completion.hasUnterminatedData()) {
@@ -491,21 +496,18 @@ export class ChatModel extends BaseModel implements IChatModel {
         }
 
         if (isEmpty(finalText) && finalToolCalls.length === 0) {
-            this.logger.warn(`💬 [流式] 模型未输出有效内容`);
+            this.logger.debug(`[${requestId}] SSE 无有效正文或工具调用`);
             throw new AppError(ErrorDefinitions.LLM.OUTPUT_EMPTY_CONTENT, {
                 context: { rawResponse: finalText, details: "模型未输出有效内容", streamDiagnostics: diagnostics.summary() },
             });
         }
-
-        /* prettier-ignore */
-        this.logger.debug(`🏁 [流式] 传输完成 | 总耗时: ${duration}ms | 输入: ${finalUsage?.prompt_tokens || "N/A"} | 输出: ${finalUsage?.completion_tokens || `~${finalText.length / 4}`}`);
 
         // 对最终拼接的完整内容进行最后一次验证
         if (validator && finalToolCalls.length === 0) {
             const finalValidation = validator(finalText, true);
             if (!finalValidation.valid) {
                 const errorMsg = finalValidation.error || "格式不匹配或模型未输出有效内容";
-                this.logger.warn(`⚠️ 最终内容验证失败 | 错误: ${errorMsg}`);
+                this.logger.debug(`[${requestId}] 输出结构校验失败`);
                 throw new AppError(ErrorDefinitions.LLM.OUTPUT_PARSING_FAILED, {
                     context: { rawResponse: finalText, details: errorMsg },
                 });

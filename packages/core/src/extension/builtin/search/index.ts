@@ -1,4 +1,4 @@
-import { Context, Schema } from "koishi";
+import { Context, Logger, Schema } from "koishi";
 import {} from "koishi-plugin-puppeteer";
 
 import { Extension, Tool, withInnerThoughts } from "../../../extension/decorators";
@@ -45,13 +45,16 @@ export default class SearchExtension {
         optional: ["puppeteer"],
     };
 
+    private readonly logger: Logger;
+
     constructor(
         public ctx: Context,
         public config: SearchConfig,
     ) {
+        this.logger = ctx.yesimbot?.logging?.getLogger("[网页工具]") ?? ctx.logger;
         // 检查Puppeteer服务是否可用
         if (config.usePuppeteer && !ctx.puppeteer) {
-            ctx.logger.warn("配置要求使用Puppeteer，但Puppeteer服务未安装。请安装puppeteer插件。");
+            this.logger.warn("配置要求使用Puppeteer，但Puppeteer服务未安装。请安装puppeteer插件。");
         }
     }
 
@@ -109,7 +112,7 @@ export default class SearchExtension {
             }
 
             args.toolContext?.reportProgress?.("正在读取网页");
-            this.ctx.logger.info(`Bot正在获取网页: ${url}`);
+            this.logger.debug("开始读取网页");
 
             // 决定是否使用动态加载模式
             const useDynamicLoading = use_dynamic || this.config.usePuppeteer;
@@ -139,10 +142,10 @@ export default class SearchExtension {
                 });
             }
 
-            this.ctx.logger.info(`Bot成功获取网页内容，长度: ${resultContent.length}, 链接数: ${links.length}`);
+            this.logger.debug(`网页正文已提取 · ${resultContent.length} 字 · ${links.length} 个链接`);
             return Success(result);
         } catch (error: any) {
-            this.ctx.logger.error(`Bot获取网页失败: ${url} - `, error.message);
+            this.logger.debug(`读取网页失败 · ${error.response?.status ?? error.name ?? "未知错误"}`);
             if (error.name === "TimeoutError" || error.message.includes("timeout")) {
                 return Failed("请求超时，网页响应时间过长或无法加载");
             } else if (error.message.includes("net::ERR_")) {
@@ -174,7 +177,7 @@ export default class SearchExtension {
             await page.setDefaultNavigationTimeout(this.config.puppeteerTimeout);
 
             if (isDynamic) {
-                this.ctx.logger.info(`使用动态模式加载: ${url}`);
+                this.logger.debug("使用浏览器动态加载");
                 const response = await page.goto(url, {
                     waitUntil: "networkidle2",
                     timeout: this.config.puppeteerTimeout,
@@ -186,7 +189,7 @@ export default class SearchExtension {
                     await new Promise((resolve) => setTimeout(resolve, this.config.puppeteerWaitTime));
                 }
             } else {
-                this.ctx.logger.info(`使用静态模式加载: ${url}`);
+                this.logger.debug("读取静态页面");
                 const html = await this.ctx.http.get(url, {
                     headers: { "User-Agent": this.config.customUA },
                     timeout: this.config.httpTimeout,
@@ -258,7 +261,7 @@ export default class SearchExtension {
 
             return extractedData;
         } finally {
-            await page.close().catch((error) => this.ctx.logger.warn(`关闭Puppeteer页面时出错: ${error.message}`));
+            await page.close().catch((error) => this.logger.warn(`关闭Puppeteer页面时出错: ${error.message}`));
         }
     }
 
@@ -286,7 +289,7 @@ export default class SearchExtension {
             const limit = this.config.limit;
             const searchUrl = `${endpoint}?q=${encodeURIComponent(query)}&engines=${engines}&format=${format}&limit=${limit}`;
 
-            this.ctx.logger.info(`正在搜索: ${query}, 使用URL: ${searchUrl}`);
+            this.logger.debug("请求搜索服务");
 
             args.toolContext?.reportProgress?.("正在请求搜索服务");
             // 使用 Koishi 的 HTTP 服务发送请求
@@ -330,7 +333,7 @@ export default class SearchExtension {
                 resultText += `\n`;
             });
 
-            this.ctx.logger.info(`返回搜索结果: ${topResults.length}项`);
+            this.logger.debug(`搜索服务返回 ${topResults.length} 项结果`);
 
             // 如果启用了Puppeteer，添加提示信息
             if (this.ctx.puppeteer) {
@@ -342,7 +345,7 @@ export default class SearchExtension {
             if (!error.response && error.message.includes("timeout")) {
                 return Failed({ name: "TimeoutError", message: "搜索请求超时", retryable: true });
             }
-            this.ctx.logger.error(`网络搜索失败: `, error);
+            this.logger.debug(`搜索请求失败 · ${error.response?.status ?? error.name ?? "未知错误"}`);
             return Failed(`搜索过程中发生错误: ${error.message}`);
         }
     }

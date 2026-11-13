@@ -96,7 +96,7 @@ for (const streamAction of [false, true]) {
         it(`${streamAction ? "streaming" : "normal"} heartbeat reflects ${status} delivery`, async () => {
             const observations: any[] = [];
             const successfulLogs: string[] = [];
-            const logger = { debug() {}, info() {}, warn() {}, error() {}, success: (message: string) => successfulLogs.push(message) };
+            const logger = { debug: (message: string) => successfulLogs.push(message), info() {}, warn() {}, error() {}, success() {} };
             const response = JSON.stringify({
                 thoughts: { observe: "test", analyze_infer: "test", plan: "test" },
                 actions: [{ function: "send_message", params: { message: "hello" } }],
@@ -127,7 +127,7 @@ for (const streamAction of [false, true]) {
             const success = await processor.runCycle({ session: { platform: "qq", channelId: "group", cid: "qq:group" } } as any);
             expect(success).toBe(status === "success");
             expect(observations[0].status).toBe(status);
-            expect(successfulLogs.includes("单次心跳成功完成")).toBe(status === "success");
+            expect(successfulLogs.includes("本次模型决策已发送回复")).toBe(status === "success");
         });
     }
 }

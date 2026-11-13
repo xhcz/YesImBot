@@ -6,12 +6,13 @@ import { DEFAULT_BACKGROUND_TOOLS } from "../agent/config";
 import { assertReplyTurn, awaitReplyTurn, guardReplySession, replyTurnSignal, withReplyTurnGuard } from "../agent/reply-turn";
 import { Config } from "../config";
 import type { LoggerService } from "../logger";
+import { conversationLogPrefix, withConversationLog } from "../logger/conversation";
 import { PromptService } from "../prompt";
 import { sanitizeDiagnostic } from "../shared/diagnostic-sanitizer";
 import { normalizeAppError, fromAppError } from "../shared/errors";
 import { getInstanceDirectory, getInstanceScope } from "../shared/instance-scope";
 import { YesImBotService } from "../shared/service";
-import { isEmpty, stringify, truncate } from "../shared/utils";
+import { isEmpty, stringify } from "../shared/utils";
 import { conversationChannelId } from "../shared/utils/conversation-scope";
 import type { WorldStateService } from "../world";
 import { sessionChannelType } from "../world/channel-metadata";
@@ -620,7 +621,8 @@ export class ToolService extends YesImBotService<Config> {
                 ? ToolService.prototype.captureOutputOwner.call(this, session)
                 : undefined;
         const definition = this.getTool(functionName, session);
-        let result = await this.executeInvocation(functionName, params, session, toolContext);
+        const run = () => this.executeInvocation(functionName, params, session, toolContext);
+        let result = await (conversationLogPrefix() ? run() : withConversationLog(session, toolContext?.requestId, run));
         if (session && functionName !== "tool_output_read" && result.status === "success" && result.result !== undefined) {
             try {
                 const text = JSON.stringify(result.result, (_key, value) => {
@@ -926,15 +928,15 @@ export class ToolService extends YesImBotService<Config> {
         session?: Session,
         toolContext?: ToolExecutionContext,
     ): Promise<ToolCallResult> {
-        const stringifyParams = stringify(validatedParams);
+        const startedAt = Date.now();
         const initiallyReadOnly = isReadOnlyTool(tool, validatedParams);
-        this._logger.info(`→ 调用: ${functionName} | 参数: ${stringifyParams}`);
+        this._logger.debug(`执行工具 · ${functionName}`);
         let lastResult: ToolCallResult = Failed("Tool call did not execute.");
 
         for (let attempt = 1; attempt <= (this.config.advanced?.maxRetry ?? 0) + 1; attempt++) {
             try {
                 if (attempt > 1) {
-                    this._logger.info(`  - 重试 (${attempt - 1}/${this.config.advanced?.maxRetry ?? 0})`);
+                    this._logger.debug(`工具 ${functionName} · 重试 ${attempt - 1}/${this.config.advanced?.maxRetry ?? 0}`);
                     let timer: ReturnType<typeof setTimeout>;
                     try {
                         await awaitReplyTurn(
@@ -954,21 +956,20 @@ export class ToolService extends YesImBotService<Config> {
                 const execute = () => tool.execute({ ...validatedParams, session, toolContext });
                 lastResult = (await (toolContext?.backgroundExecution ? execute() : awaitReplyTurn(execute))) || Failed("Tool call did not execute.");
                 assertReplyTurn();
-                const resultString = truncate(stringify(lastResult), 120);
-
                 if (lastResult.status === "success") {
-                    this._logger.success(`✔ 成功 ← 返回: ${resultString}`);
+                    this._logger.info(`工具 ${functionName} · 已返回成功回执 · ${Date.now() - startedAt}ms`);
                     return lastResult;
                 }
                 if (lastResult.error) {
                     if (!lastResult.error.retryable) {
-                        this._logger.warn(`✖ 失败 (不可重试) ← 原因: ${stringify(lastResult.error)}`);
+                        this._logger.warn(`工具 ${functionName} · 失败，未重试 · ${lastResult.error.code ?? lastResult.error.name}`);
                         return lastResult;
                     } else {
                         if (!initiallyReadOnly || !isReadOnlyTool(tool, validatedParams)) {
+                            this._logger.warn(`工具 ${functionName} · 失败，有副作用的操作不自动重试 · ${lastResult.error.code ?? lastResult.error.name}`);
                             return { ...lastResult, error: { ...lastResult.error, retryable: false } };
                         }
-                        this._logger.warn(`⚠ 读取失败 (可重试) ← 原因: ${lastResult.error}`);
+                        this._logger.debug(`工具 ${functionName} · 本次读取失败 · ${lastResult.error.code ?? lastResult.error.name}`);
                         continue;
                     }
                 } else {
@@ -983,7 +984,7 @@ export class ToolService extends YesImBotService<Config> {
                 return lastResult;
             }
         }
-        this._logger.error(`✖ 失败 (耗尽重试) | 工具: ${functionName}`);
+        this._logger.error(`工具 ${functionName} · 已用完执行次数 · ${lastResult.error?.code ?? lastResult.error?.name ?? "未知错误"}`);
         return lastResult;
     }
 

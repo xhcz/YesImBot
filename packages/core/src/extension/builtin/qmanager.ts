@@ -1,4 +1,4 @@
-import { Context, Schema } from "koishi";
+import { Context, Logger, Schema } from "koishi";
 
 import { Extension, Tool, withInnerThoughts } from "../../extension/decorators";
 import { Failed, Success } from "../../extension/helpers";
@@ -15,6 +15,10 @@ import { isEmpty } from "../../shared/utils";
 })
 export default class QManagerExtension {
     static readonly Config = Schema.object({});
+
+    private get logger(): Logger {
+        return this.ctx.yesimbot?.logging?.getLogger("[群管理]") ?? this.ctx.logger;
+    }
 
     constructor(
         public ctx: Context,
@@ -34,10 +38,10 @@ export default class QManagerExtension {
         const targetChannel = isEmpty(channel_id) ? session.channelId! : channel_id;
         try {
             await session.bot.deleteMessage(targetChannel, message_id);
-            this.ctx.logger.info(`Bot[${session.selfId}]撤回了消息: ${message_id}`);
+            this.logger.info(`Bot[${session.selfId}]撤回了消息: ${message_id}`);
             return Success();
         } catch (error) {
-            this.ctx.logger.error(`Bot[${session.selfId}]撤回消息失败: ${message_id} - `, error.message);
+            this.logger.error(`Bot[${session.selfId}]撤回消息失败: ${message_id} - `, error.message);
             return Failed(`撤回消息失败 - ${error.message}`);
         }
     }
@@ -58,10 +62,10 @@ export default class QManagerExtension {
         if (!targetGuild) return Failed("当前会话没有群组，请明确指定目标群组 ID");
         try {
             await session.bot.muteGuildMember(targetGuild, user_id, Number(duration) * 60 * 1000);
-            this.ctx.logger.info(`Bot[${session.selfId}]在频道 ${channel_id} 禁言用户: ${user_id}`);
+            this.logger.info(`Bot[${session.selfId}]在群 ${targetGuild} 禁言用户: ${user_id}`);
             return Success();
         } catch (error) {
-            this.ctx.logger.error(`Bot[${session.selfId}]在频道 ${channel_id} 禁言用户: ${user_id} 失败 - `, error.message);
+            this.logger.error(`Bot[${session.selfId}]在群 ${targetGuild} 禁言用户: ${user_id} 失败 - `, error.message);
             return Failed(`禁言用户 ${user_id} 失败 - ${error.message}`);
         }
     }
@@ -81,10 +85,10 @@ export default class QManagerExtension {
         if (!targetGuild) return Failed("当前会话没有群组，请明确指定目标群组 ID");
         try {
             await session.bot.kickGuildMember(targetGuild, user_id);
-            this.ctx.logger.info(`Bot[${session.selfId}]在频道 ${channel_id} 踢出了用户: ${user_id}`);
+            this.logger.info(`Bot[${session.selfId}]在群 ${targetGuild} 踢出了用户: ${user_id}`);
             return Success();
         } catch (error) {
-            this.ctx.logger.error(`Bot[${session.selfId}]在频道 ${channel_id} 踢出用户: ${user_id} 失败 - `, error.message);
+            this.logger.error(`Bot[${session.selfId}]在群 ${targetGuild} 踢出用户: ${user_id} 失败 - `, error.message);
             return Failed(`踢出用户 ${user_id} 失败 - ${error.message}`);
         }
     }

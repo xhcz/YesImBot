@@ -5,6 +5,7 @@ import { Context, Logger, Schema } from "koishi";
 import { Config } from "../config";
 import { bindErrorReporter, ErrorReporter } from "../shared/errors";
 import { YesImBotService } from "../shared/service";
+import { conversationLogPrefix } from "./conversation";
 import { LocalLogWriter, LocalLoggingConfig, sanitizeLog } from "./local-writer";
 
 /**
@@ -14,7 +15,7 @@ import { LocalLogWriter, LocalLoggingConfig, sanitizeLog } from "./local-writer"
 export enum LogLevel {
     // 级别 0: 完全静默，不输出任何日志
     SILENT = 0,
-    // 级别 1: 只显示最核心的成功/失败信息
+    // 级别 1: 只显示错误信息
     ERROR = 1,
     // 级别 2: 显示常规信息、警告以及更低级别的所有信息
     INFO = 2,
@@ -54,13 +55,13 @@ function createLevelAwareLoggerProxy(
     logger: Logger,
     configuredLevel: LogLevel,
     reporter: ErrorReporter,
-    write?: (name: string, level: number, method: string, args: any[]) => void,
+    write?: (name: string, level: number, method: string, args: any[], prefix?: string) => void,
 ): Logger {
     logger.level = configuredLevel;
 
     // 映射到 reggol 的实际级别值
     const methodLevels: Record<string, number> = {
-        success: 1,
+        success: 2,
         error: 1,
         info: 2,
         warn: 2,
@@ -86,10 +87,15 @@ function createLevelAwareLoggerProxy(
 
                 const originalMethod = Reflect.get(target, prop, receiver);
                 return (...args: any[]) => {
+                    const prefix = conversationLogPrefix();
                     try {
-                        write?.(target.name, methodLevel, propName, args);
+                        write?.(target.name, methodLevel, propName, args, prefix);
                     } catch {}
-                    if (methodLevel <= configuredLevel) return originalMethod.apply(target, args);
+                    if (methodLevel > configuredLevel) return;
+                    if (!prefix) return originalMethod.apply(target, args);
+                    if (args.length === 1 && typeof args[0] === "string" && !prefix.includes("%")) return originalMethod.call(target, `${prefix} ${args[0]}`);
+                    if (typeof args[0] === "string") return originalMethod.call(target, `%s ${args[0]}`, prefix, ...args.slice(1));
+                    return originalMethod.call(target, "%s", prefix, ...args);
                 };
             }
 
@@ -133,13 +139,14 @@ export class LoggerService extends YesImBotService<Config> {
         await this.localWriter?.close();
     }
 
-    private writeLocal(name: string, level: number, method: string, args: any[]): void {
+    private writeLocal(name: string, level: number, method: string, args: any[], prefix?: string): void {
         if (!this.localWriter || level > (this.config.logging.local?.level ?? Infinity)) return;
+        const message = format(...args.map((value) => sanitizeLog(value)));
         void this.localWriter.write({
             timestamp: new Date().toISOString(),
             name,
             level: method,
-            message: format(...args.map((value) => sanitizeLog(value))),
+            message: prefix ? `${prefix} ${message}` : message,
             arguments: args,
         });
     }
