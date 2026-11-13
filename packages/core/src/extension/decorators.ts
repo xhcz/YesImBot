@@ -129,6 +129,8 @@ export function Tool<TParams>(metadata: ToolMetadata<TParams>) {
             name: metadata.name || propertyKey,
             description: metadata.description,
             parameters: metadata.parameters,
+            modelReplacement: metadata.modelReplacement,
+            supersedes: metadata.supersedes,
             execute: descriptor.value,
             isSupported: metadata.isSupported,
             background: metadata.background,

@@ -278,7 +278,7 @@ export class HeartbeatProcessor {
             return { system, user };
         };
         const nativeTools = this.config.nativeToolCalling
-            ? this.toolService.getAvailableTools(stimulus.session).map((definition) => ({
+            ? this.toolService.getAvailableTools(stimulus.session, undefined, "model").map((definition) => ({
                   type: "function",
                   function: { name: definition.name, description: definition.description, parameters: toolJSONSchema(definition.parameters) },
               }))
@@ -641,7 +641,7 @@ export class HeartbeatProcessor {
             },
         ];
         const attachedImageIds = this.contextBuilder.getAttachedImageIds?.(messages) ?? [];
-        const definitions = this.toolService.getAvailableTools(session, { attachedImageIds });
+        const definitions = this.toolService.getAvailableTools(session, { attachedImageIds }, "model");
         if (!definitions.length) throw new Error("当前会话没有可用工具");
         const tools: Tool[] = definitions.map((definition) => ({
             type: "function",

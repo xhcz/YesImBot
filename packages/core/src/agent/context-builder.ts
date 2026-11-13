@@ -295,7 +295,7 @@ export class PromptContextBuilder {
 
         // 5. 返回最终的上下文对象
         return {
-            toolSchemas: this.toolService.getToolSchemas(session),
+            toolSchemas: this.toolService.getToolSchemas(session, "model"),
             memoryBlocks: this.memoryService.getMemoryBlocksForRendering(),
             worldState: worldState,
         };

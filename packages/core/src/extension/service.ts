@@ -1001,17 +1001,19 @@ export class ToolService extends YesImBotService<Config> {
         return tool;
     }
 
-    public getAvailableTools(session?: Session, toolContext?: ToolExecutionContext): ToolDefinition[] {
+    public getAvailableTools(session?: Session, toolContext?: ToolExecutionContext, audience?: "model"): ToolDefinition[] {
         if (this.schemaStopped) return [];
-        // 如果没有 session，无法进行过滤，返回所有工具
-        if (!session) {
-            return Array.from(this.tools.values()).filter((tool) => this.getTool(tool.name, session, toolContext) === tool);
-        }
-        // 如果有 session，则过滤出支持的工具
         return Array.from(this.tools.values())
             .filter((tool) => this.getTool(tool.name, session, toolContext) === tool)
+            .filter((tool) => {
+                if (audience !== "model" || !tool.modelReplacement) return true;
+                const replacement = this.getTool(tool.modelReplacement, session, toolContext);
+                return (
+                    !replacement?.supersedes?.includes(tool.name) || this.toolOwners.get(tool.name)?.context !== this.toolOwners.get(replacement.name)?.context
+                );
+            })
             .map((tool) =>
-                this.background && tool.background
+                session && this.background && tool.background
                     ? { ...tool, description: tool.description + " [Supports background_task_start for independent work.]" }
                     : tool,
             );
@@ -1038,8 +1040,8 @@ export class ToolService extends YesImBotService<Config> {
      * @param session 可选的会话对象
      * @returns 可用工具的 Schema 数组
      */
-    public getToolSchemas(session?: Session): ToolSchema[] {
-        return this.getAvailableTools(session).map(this._toolDefinitionToSchema);
+    public getToolSchemas(session?: Session, audience?: "model"): ToolSchema[] {
+        return this.getAvailableTools(session, undefined, audience).map(this._toolDefinitionToSchema);
     }
 
     /**
