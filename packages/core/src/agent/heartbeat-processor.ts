@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { GenerateTextResult } from "@xsai/generate-text";
 import type { Tool } from "@xsai/shared-chat";
 import { Message } from "@xsai/shared-chat";
-import { Context, h, Logger, Session } from "koishi";
+import { Context, Schema, h, Logger, Session } from "koishi";
 import { v4 as uuidv4 } from "uuid";
 
 import { assertReplyTurn, guardReplySession, isReplyTurnCancelled, replyTurnSignal, withReplyTurnGuard } from "../agent/reply-turn";
@@ -27,8 +27,9 @@ import { PromptContextBuilder } from "./context-builder";
 import { deriveConversationFocus, FocusedWorldState, packWorldState } from "./context-packing";
 import { projectWorldForModel } from "./projection";
 
+const NATIVE_SILENCE_TOOL = "end_turn_without_reply";
 const NATIVE_SYSTEM_PROMPT =
-    "本轮启用原生工具调用。请通过工具接口执行动作，不要输出 JSON actions；需要先查询时，先调用查询工具，获得结果后下一轮再决策。使用 send_message 发送回复。";
+    "本轮启用原生工具调用。请通过工具接口执行动作，不要输出 JSON actions；需要先查询时，先调用查询工具，获得结果后下一轮再决策。使用 send_message 发送回复。决定沉默时仅调用 end_turn_without_reply，结束本轮。";
 const escapeMetadata = (value: unknown) => JSON.stringify(value).replace(/[<>&]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[character]!);
 
 /** Validate the complete model plan before any real action is admitted. */
@@ -641,14 +642,23 @@ export class HeartbeatProcessor {
             },
         ];
         const attachedImageIds = this.contextBuilder.getAttachedImageIds?.(messages) ?? [];
-        const definitions = this.toolService.getAvailableTools(session, { attachedImageIds });
-        if (!definitions.length) throw new Error("当前会话没有可用工具");
+        const silenceParameters = Schema.object({});
+        const definitions = this.toolService.getAvailableTools(session, { attachedImageIds }).filter((definition) => definition.name !== NATIVE_SILENCE_TOOL);
         const tools: Tool[] = definitions.map((definition) => ({
             type: "function",
             function: { name: definition.name, description: definition.description, parameters: toolJSONSchema(definition.parameters) },
             // SDK 阶段不执行任何真实工具，失败重试不会重放消息。
             execute: () => ({}),
         }));
+        tools.push({
+            type: "function",
+            function: {
+                name: NATIVE_SILENCE_TOOL,
+                description: "结束当前轮次，保持沉默。必须单独调用，不发送消息或执行其他动作。",
+                parameters: toolJSONSchema(silenceParameters),
+            },
+            execute: () => ({}),
+        });
         let actions: Array<{ function: string; params: Record<string, unknown> }> = [];
         const configuredRetries = this.config.nativeToolCorrectionRetries ?? 1;
         const correctionRetries = Number.isSafeInteger(configuredRetries) && configuredRetries >= 0 ? configuredRetries : 1;
@@ -734,6 +744,13 @@ export class HeartbeatProcessor {
                     fail("arguments_not_object");
                     continue;
                 }
+                if (toolName === NATIVE_SILENCE_TOOL) {
+                    if (response.toolCalls.length !== 1 || Object.keys(params).length !== 0) {
+                        fail("silence_must_be_standalone");
+                        continue;
+                    }
+                    return { continue: false, replySent: false };
+                }
                 const definition = this.toolService.getTool(call.toolName, session, { attachedImageIds });
                 if (!definition) {
                     fail("tool_unavailable");
@@ -772,6 +789,9 @@ export class HeartbeatProcessor {
                     })),
                 },
             });
+            this.logger.debug(
+                `原生工具调用校验失败 | 尝试: ${attempt + 1} | 调用数: ${response.toolCalls.length} | 原因: ${failures.map((item) => item.reason).join(",")}`,
+            );
             if (attempt >= correctionRetries) throw failure;
             const calls = response.toolCalls;
             const ids = calls.map((call) => call.toolCallId);
