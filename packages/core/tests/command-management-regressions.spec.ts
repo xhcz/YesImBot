@@ -81,6 +81,27 @@ describe("configuration commands", () => {
     });
 });
 
+it("lists five tools by default and rejects a page size of zero", async () => {
+    const ctx = app();
+    const manager = service(ctx);
+    manager.register(
+        extension(
+            ctx,
+            "page-test",
+            Array.from({ length: 6 }, (_, i) => tool(`item_${i}`)),
+        ),
+        true,
+        {},
+    );
+    (manager as any).registerCommands();
+    const first = await run(ctx, "tool.list");
+    expect(first).toContain("第 1/2 页");
+    expect(first).toContain("item_4");
+    expect(first).not.toContain("item_5");
+    expect(await run(ctx, "tool.list", "--page 2")).toContain("item_5");
+    expect(await run(ctx, "tool.list", "--size 0")).not.toContain("item_0");
+});
+
 describe("extension management", () => {
     it("preserves the complete core config and builtin options while disable/enable reload the actual plugin", async () => {
         const ctx = app();
@@ -106,7 +127,9 @@ describe("extension management", () => {
         ctx.plugin(Parent, initial);
         await ctx.start();
         expect(live!.getTool("ban")).toBeTruthy();
-        expect(await run(ctx, "extension.disable", "qmanager")).toBe("禁用成功");
+        expect(await run(ctx, "extension.set", "qmanager invalid")).toContain("on 或 off");
+        expect(starts).toBe(1);
+        expect(await run(ctx, "extension.set", "qmanager off")).toBe("禁用成功");
         expect(current!.heartbeat).toBe(7);
         expect(current!.providers).toEqual(initial.providers);
         expect(current!.extra?.qmanager).toEqual({ enabled: false, custom: 42 });

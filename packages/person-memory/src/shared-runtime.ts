@@ -6,7 +6,7 @@ import { conversationChannelId } from "koishi-plugin-yesimbot";
 
 import { PeopleCatalog } from "./catalog";
 import { claimParameters, executeClaimTool, visibleClaims } from "./claim-tools";
-import { describePeopleCommand } from "./command-help";
+import { describePeopleCommand, parsePeopleProfile } from "./command-help";
 import { escapeContext } from "./context";
 import { ContinuityStore, registerContinuityModels, sourceRef, summaryUnsafeIn, type RecallTarget } from "./continuity";
 import { PersonHistoryReset, readPersonAction } from "./history-reset";
@@ -859,14 +859,12 @@ export function applySharedMemory(ctx: Context, config: Config) {
         return `画像版本 ${found.person.revision}\n${JSON.stringify(found, null, 2)}`;
     });
     command("people.create <name:text>", "建立共同人物档案", async (s, w, scope, [name]) => w.create(scope, name, actor(s)));
-    command("people.edit <ref:string> <profile:text>", "人工纠正完整画像", async (s, w, scope, [ref, profile]) =>
-        w.setProfile(scope, refOf(s, ref), profile, actor(s)),
+    command("people.edit <ref:string> <profile:text>", "人工纠正完整画像", async (s, w, scope, [ref, profile], options) =>
+        w.setProfile(scope, refOf(s, ref), parsePeopleProfile(profile, options?.format), actor(s)),
     );
-    command("people.edit_json <ref:string> <profile:text>", "人工纠正完整结构画像（JSON）", async (s, w, scope, [ref, profile]) => {
-        const document = JSON.parse(profile);
-        if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error("请提供完整结构画像 JSON 对象");
-        return w.setProfile(scope, refOf(s, ref), document, actor(s));
-    });
+    command("people.edit_json <ref:string> <profile:text>", "人工纠正完整结构画像（也可用 people.edit --format json）", async (s, w, scope, [ref, profile]) =>
+        w.setProfile(scope, refOf(s, ref), parsePeopleProfile(profile, "json"), actor(s)),
+    );
     command("people.rename <ref:string> <name:text>", "修改共同称呼", async (s, w, scope, [ref, name]) => w.rename(scope, refOf(s, ref), name, actor(s)));
     command("people.clear <ref:string>", "清空画像，保留来源与审计", async (s, w, scope, [ref]) => w.setProfile(scope, refOf(s, ref), "", actor(s)));
     command("people.bind <account:string> <target:string> [confidence:number]", "纠正账号归属", async (s, w, scope, [account, target, confidence = 1]) =>

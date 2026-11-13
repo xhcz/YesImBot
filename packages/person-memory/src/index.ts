@@ -4,7 +4,7 @@ import * as core from "koishi-plugin-yesimbot";
 import { PeopleCatalog } from "./catalog";
 import { claimParameters, executeClaimTool, visibleClaims } from "./claim-tools";
 import type { ClaimChange } from "./claims";
-import { describePeopleCommand } from "./command-help";
+import { describePeopleCommand, parsePeopleProfile } from "./command-help";
 import { identityWarning, renderPeople } from "./context";
 import { PersonHistoryReset, readPersonAction } from "./history-reset";
 import type { ProfileDocument } from "./profile";
@@ -690,16 +690,16 @@ export function apply(ctx: Context, config: Config) {
         "修改心中称呼（不改平台昵称）",
         async (scope, actor, [ref, name]) => `已改称呼：${(await store.rename(scope, ref, name, actor)).name}`,
     );
-    command("people.edit_json <ref:string> <profile:text>", "人工纠正完整结构画像（JSON）", async (scope, actor, [ref, profile]) => {
-        const document = JSON.parse(profile);
-        if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error("请提供完整结构画像 JSON 对象");
-        const person = await store.setProfile(scope, ref, document, actor);
-        return show(person);
-    });
+    command("people.edit_json <ref:string> <profile:text>", "人工纠正完整结构画像（也可用 people.edit --format json）", async (scope, actor, [ref, profile]) =>
+        show(await store.setProfile(scope, ref, parsePeopleProfile(profile, "json"), actor)),
+    );
     command(
         "people.edit <ref:string> <profile:text>",
         "人工替换完整画像，可直接纠错并清除需复核标记",
-        async (scope, actor, [ref, profile]) => `已更新：${show(await store.setProfile(scope, ref, profile, actor))}`,
+        async (scope, actor, [ref, profile], _session, options) => {
+            const person = await store.setProfile(scope, ref, parsePeopleProfile(profile, options.format), actor);
+            return options.format === "json" ? show(person) : `已更新：${show(person)}`;
+        },
     );
     command(
         "people.clear <ref:string>",

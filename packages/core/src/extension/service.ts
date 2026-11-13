@@ -226,6 +226,7 @@ export class ToolService extends YesImBotService<Config> {
     }
 
     private registerCommands() {
+        const defaultToolPageSize = 5;
         this.ctx.command("tool", "工具管理指令集");
         this.ctx.command("extension", "扩展管理指令集");
 
@@ -233,11 +234,11 @@ export class ToolService extends YesImBotService<Config> {
             .command("tool.list", "列出所有可用工具", { authority: 3 })
             .option("filter", "-f <keyword:string> 按名称或描述过滤工具")
             .option("page", "--page <page:natural> 指定显示的页码 (默认为 1)", { fallback: 1 })
-            .option("size", "--size <size:natural> 指定每页显示的数量 (默认为 10)", { fallback: 5 })
+            .option("size", `--size <size:posint> 每页数量（默认 ${defaultToolPageSize}）`, { fallback: defaultToolPageSize })
             .usage(`查询并展示当前所有已加载且可用的工具。\n支持通过关键词过滤和分页显示，方便在工具数量多时进行查找。`)
             .example(
                 [
-                    "tool.list                      # 显示第一页的10个工具",
+                    `tool.list                      # 显示第一页的 ${defaultToolPageSize} 个工具`,
                     `tool.list -f search            # 查找所有名称或描述中包含 "search" 的工具`,
                     "tool.list --page 2 --size 5    # 显示第 2 页，每页 5 个工具",
                     `tool.list -f memory --size 3   # 查找 "memory" 相关工具并每页显示 3 个`,
@@ -263,7 +264,7 @@ export class ToolService extends YesImBotService<Config> {
 
                 // 4. 计算分页参数
                 const page = options.page ?? 1;
-                const size = options.size ?? 20;
+                const size = options.size ?? defaultToolPageSize;
                 const totalPages = Math.ceil(totalCount / size);
 
                 if (page > totalPages) {
@@ -346,7 +347,7 @@ export class ToolService extends YesImBotService<Config> {
             .command("extension.list", "列出所有已加载的扩展", { authority: 3 })
             .usage("查询并展示当前所有已成功加载的扩展及其描述")
             .example("extension.list")
-            .action(async ({ session }) => {
+            .action(() => {
                 const extensions = this.extensions;
                 if (extensions.size === 0) {
                     return "当前没有已加载的扩展";
@@ -357,33 +358,47 @@ export class ToolService extends YesImBotService<Config> {
                 return `发现 ${extensions.size} 个已加载的扩展：\n${extList}`;
             });
 
+        const extensionToggleUsage = "内置扩展更新当前实例的 extra 配置；外部扩展更新其自身插件配置。保存后重载对应插件并保留其他设置。";
+        const setExtensionState = async (session: Session | undefined, name: string, enabled: boolean) => {
+            if (!session) return "会话不可用";
+            if (!name) return "未指定扩展名称";
+            const operation = enabled ? "enable" : "disable";
+            const label = enabled ? "启用" : "禁用";
+            try {
+                // Prefer registered instances, including disabled builtins. Retain the
+                // module lookup for external extensions that export an instance.
+                const ext = this.knownExtensions.get(name) || (enabled ? ((await import(name)) as IExtension) : undefined);
+                if (!ext?.metadata?.name || !ext.ctx?.scope) return "扩展未找到或无法定位其插件配置";
+                const scope = ext.metadata.builtin ? this.ctx.scope : ext.ctx.scope;
+                const current = scope.config;
+                const data = ext.metadata.builtin
+                    ? { ...current, extra: { ...current.extra, [ext.metadata.name]: { ...current.extra?.[ext.metadata.name], enabled } } }
+                    : { ...current, enabled };
+                // Do not pass false: it saves but suppresses both update callbacks and reload.
+                scope.update(data);
+                await this.recordFrameworkChange(session, `extension.${operation}`, ext.metadata.name, "success");
+                return `${label}成功`;
+            } catch (error) {
+                return `${label}失败: ${error.message}`;
+            }
+        };
+
+        this.ctx
+            .command("extension.set <name:string> <state:string>", "启用或禁用扩展", { authority: 3 })
+            .usage(`状态：on 启用，off 禁用。${extensionToggleUsage}`)
+            .example("extension.set search on")
+            .action(({ session }, name, state) => {
+                if (state !== "on" && state !== "off") return "请将状态指定为 on 或 off。";
+                return setExtensionState(session, name, state === "on");
+            });
+
         for (const enabled of [true, false]) {
             const operation = enabled ? "enable" : "disable";
             const label = enabled ? "启用" : "禁用";
             this.ctx
-                .command(`extension.${operation} <name:string>`, `${label}扩展`, { authority: 3 })
-                .usage("内置扩展更新当前实例的 extra 配置；外部扩展更新其自身插件配置。保存后重载对应插件并保留其他设置。")
-                .action(async ({ session }, name) => {
-                    if (!session) return "会话不可用";
-                    if (!name) return "未指定扩展名称";
-                    try {
-                        // Prefer registered instances, including disabled builtins. Retain the
-                        // module lookup for external extensions that export an instance.
-                        const ext = this.knownExtensions.get(name) || (enabled ? ((await import(name)) as IExtension) : undefined);
-                        if (!ext?.metadata?.name || !ext.ctx?.scope) return "扩展未找到或无法定位其插件配置";
-                        const scope = ext.metadata.builtin ? this.ctx.scope : ext.ctx.scope;
-                        const current = scope.config;
-                        const data = ext.metadata.builtin
-                            ? { ...current, extra: { ...current.extra, [ext.metadata.name]: { ...current.extra?.[ext.metadata.name], enabled } } }
-                            : { ...current, enabled };
-                        // Do not pass false: it saves but suppresses both update callbacks and reload.
-                        scope.update(data);
-                        await this.recordFrameworkChange(session, `extension.${operation}`, ext.metadata.name, "success");
-                        return `${label}成功`;
-                    } catch (error) {
-                        return `${label}失败: ${error.message}`;
-                    }
-                });
+                .command(`extension.${operation} <name:string>`, `${label}扩展（也可用 extension.set）`, { authority: 3 })
+                .usage(extensionToggleUsage)
+                .action(({ session }, name) => setExtensionState(session, name, enabled));
         }
     }
 
