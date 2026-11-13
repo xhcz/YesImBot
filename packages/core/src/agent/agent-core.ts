@@ -5,6 +5,7 @@ import { Config } from "../config";
 import { ToolService } from "../extension";
 import type { LoggerService } from "../logger";
 import { withConversationLog } from "../logger/conversation";
+import { recordConversationReport, withConversationReport } from "../logger/conversation-report";
 import { MemoryService } from "../memory";
 import { ChatModelSwitcher, ModelService, TaskType } from "../model";
 import { loadTemplate, PromptService } from "../prompt";
@@ -51,6 +52,7 @@ declare module "koishi" {
 export class AgentCore extends YesImBotService<Config> {
     // 依赖的服务
     private readonly logger: Logger;
+    private readonly logging: LoggerService;
     private readonly worldState: WorldStateService;
     private readonly modelService: ModelService;
     private readonly promptService: PromptService;
@@ -94,7 +96,9 @@ export class AgentCore extends YesImBotService<Config> {
     private readonly activeDecisionIds = new Map<string, string>();
 
     private recordDecision(stimulus: AgentStimulus<any>, update: Partial<DecisionRecord>): void {
-        this.decisions?.update((stimulus as TracedStimulus).decisionId, update);
+        const decisionId = (stimulus as TracedStimulus).decisionId;
+        this.decisions?.update(decisionId, update);
+        if (stimulus.reportTrace) withConversationReport(stimulus.reportTrace, () => recordConversationReport("decision", { decisionId, ...update }));
     }
 
     public queryDecision(session: Session): string {
@@ -143,10 +147,12 @@ export class AgentCore extends YesImBotService<Config> {
         pending.controller.abort();
         this.recordDecision(pending.stimulus, { assessment: { mode: this.config.typesafe?.mode ?? "off", multiplier: null, status: "cancelled" } });
         if (settle && this.replyControl.valid(this.replyTarget(pending.stimulus.session), pending.token)) {
-            withConversationLog(pending.stimulus.session, (pending.stimulus as TracedStimulus).decisionId, () => {
-                this.logger.debug(`辅助评估已取消 · ${reason === "new_message" ? "同会话收到新消息，继续判定旧消息" : "仅结算意愿"}`);
-                this.processStimulus(pending.stimulus, 1, reason === "new_message");
-            });
+            withConversationReport(pending.stimulus.reportTrace, () =>
+                withConversationLog(pending.stimulus.session, (pending.stimulus as TracedStimulus).decisionId, () => {
+                    this.logger.debug(`辅助评估已取消 · ${reason === "new_message" ? "同会话收到新消息，继续判定旧消息" : "仅结算意愿"}`);
+                    this.processStimulus(pending.stimulus, 1, reason === "new_message");
+                }),
+            );
         } else this.recordDecision(pending.stimulus, { stage: "cancelled", reason });
     }
 
@@ -166,7 +172,25 @@ export class AgentCore extends YesImBotService<Config> {
             channelCid,
             decisionId: this.decisions?.begin(this.replyTarget(session), type, session.messageId),
         };
-        withConversationLog(session, stimulus.decisionId, () => this.assessStimulus(stimulus, channelCid));
+        stimulus.reportTrace = this.logging?.startConversationReport?.(session, stimulus.decisionId);
+        withConversationReport(stimulus.reportTrace, () =>
+            withConversationLog(session, stimulus.decisionId, () => {
+                if (stimulus.reportTrace)
+                    recordConversationReport("stimulus", {
+                        type,
+                        content: session.content,
+                        userId: session.userId,
+                        messageId: session.messageId,
+                        quoteId: session.quote?.id,
+                        channelId: session.channelId,
+                        guildId: session.guildId,
+                        selfId: session.selfId,
+                        platform: session.platform,
+                        isDirect: session.isDirect,
+                    });
+                this.assessStimulus(stimulus, channelCid);
+            }),
+        );
     }
 
     private assessStimulus(stimulus: TracedStimulus, channelCid: string): void {
@@ -261,6 +285,7 @@ export class AgentCore extends YesImBotService<Config> {
         },
     ) {
         super(ctx, config);
+        this.logging = deps.logging;
         this.logger = deps.logging.getLogger("[智能体核心]");
         const evaluation = config.typesafe?.evaluationModel;
         const topicModel = config.topics?.model;
@@ -516,6 +541,9 @@ export class AgentCore extends YesImBotService<Config> {
     private resetHistory(scope: HistoryResetScope): Promise<void> {
         const settling: Array<Promise<void>> = [];
         const all = "type" in scope && scope.type === "all";
+        this.logging?.clearConversationReports?.((platform, channelId, isDirect) =>
+            "type" in scope ? all || scope.type === (isDirect ? "private" : "guild") : platform === scope.platform && channelId === scope.channelId,
+        );
         const keys = new Set([
             ...this.historyTargets.keys(),
             ...this.pendingAssessments.keys(),

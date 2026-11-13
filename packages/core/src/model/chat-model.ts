@@ -11,6 +11,7 @@ import { isEmpty, JsonParser, toBoolean } from "../shared/utils";
 import { BaseModel, formatModelIdentity } from "./base-model";
 import { ModelAbility, ModelConfig } from "./config";
 import { parseContextLimit } from "./context-limit";
+import { observeModelReportRequest, withModelConversationReport } from "./conversation-capture";
 import { StreamDiagnostics } from "./stream-diagnostics";
 import { observeUsageFetch, withUsageScope } from "./usage";
 import type { UsageOwner } from "./usage-owner";
@@ -133,6 +134,8 @@ export class ChatModel extends BaseModel implements IChatModel {
         const useStream = options.stream ?? this.config.parameters?.stream ?? true;
         const requestId = `chat-${++ChatModel.requestSequence}`;
         const chatOptions = this.buildChatOptions(options);
+        const fetch = chatOptions.fetch!;
+        chatOptions.fetch = observeModelReportRequest((input, init) => fetch(input as URL, init ?? {}));
         const capacity =
             this.config.contextLimit?.mode === "custom"
                 ? parseContextLimit(this.config.contextLimit.value ?? "")
@@ -149,10 +152,14 @@ export class ChatModel extends BaseModel implements IChatModel {
         );
 
         try {
-            return await withUsageScope({ contextBudget: budget.report }, () =>
-                useStream
-                    ? this._executeStream(chatOptions, options.onStreamStart, options.validation, requestId, options.singleStep)
-                    : this._executeNonStream(chatOptions, options.singleStep, options.validation, requestId),
+            return await withModelConversationReport(
+                { requestId, provider: this.config.providerName, model: this.id, purpose: options.requestPurpose ?? "对话" },
+                () =>
+                    withUsageScope({ contextBudget: budget.report }, () =>
+                        useStream
+                            ? this._executeStream(chatOptions, options.onStreamStart, options.validation, requestId, options.singleStep)
+                            : this._executeNonStream(chatOptions, options.singleStep, options.validation, requestId),
+                    ),
             );
         } catch (error) {
             this.logger.debug(

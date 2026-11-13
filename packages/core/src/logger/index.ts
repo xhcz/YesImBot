@@ -6,6 +6,7 @@ import { Config } from "../config";
 import { bindErrorReporter, ErrorReporter } from "../shared/errors";
 import { YesImBotService } from "../shared/service";
 import { conversationLogPrefix } from "./conversation";
+import { ConversationReportRecorder, recordConversationReport, type ConversationReport, type ReportTarget } from "./conversation-report";
 import { LocalLogWriter, LocalLoggingConfig, sanitizeLog } from "./local-writer";
 
 /**
@@ -110,6 +111,7 @@ export class LoggerService extends YesImBotService<Config> {
     _logger: Logger;
     private localWriter?: LocalLogWriter;
     private readonly errorReporter: ErrorReporter;
+    private readonly conversationReports?: ConversationReportRecorder;
 
     constructor(ctx: Context, config: Config) {
         super(ctx, config);
@@ -121,11 +123,15 @@ export class LoggerService extends YesImBotService<Config> {
                 config.providers?.map((provider) => provider.apiKey).filter(Boolean),
             );
         }
+        if ((config.errorReporting?.enabled || this.localWriter) && ["masked", "raw"].includes(config.errorReporting?.conversationDetails ?? "")) {
+            this.conversationReports = new ConversationReportRecorder();
+        }
         this.errorReporter = new ErrorReporter(
             config.errorReporting,
             ctx.logger("[错误报告]"),
-            (id, error) => this.recordError(id, error),
+            (id, error, conversation) => (conversation ? this.recordError(id, error, conversation) : this.recordError(id, error)),
             config.providers?.map((provider) => provider.apiKey).filter(Boolean),
+            () => this.conversationReports?.snapshot(),
         );
         this._logger = createLevelAwareLoggerProxy(ctx.logger("[日志服务]"), config.logging.level, this.errorReporter, this.writeLocal.bind(this));
     }
@@ -136,10 +142,12 @@ export class LoggerService extends YesImBotService<Config> {
 
     public async stop(): Promise<void> {
         this.errorReporter.dispose();
+        this.conversationReports?.stop();
         await this.localWriter?.close();
     }
 
     private writeLocal(name: string, level: number, method: string, args: any[], prefix?: string): void {
+        if (this.conversationReports) recordConversationReport("log", { name, level: method, prefix, arguments: args }, this.conversationReports);
         if (!this.localWriter || level > (this.config.logging.local?.level ?? Infinity)) return;
         const message = format(...args.map((value) => sanitizeLog(value)));
         void this.localWriter.write({
@@ -151,9 +159,17 @@ export class LoggerService extends YesImBotService<Config> {
         });
     }
 
-    public async recordError(errorId: string, error: Error): Promise<void> {
+    public startConversationReport(target: ReportTarget, turn?: string) {
+        return this.conversationReports?.start(target, turn);
+    }
+
+    public clearConversationReports(matches: (platform: string, channelId: string, isDirect: boolean) => boolean): void {
+        this.conversationReports?.clear(matches);
+    }
+
+    public async recordError(errorId: string, error: Error, conversation?: ConversationReport): Promise<void> {
         if (!this.localWriter) return;
-        await this.localWriter.write({ timestamp: new Date().toISOString(), level: "error", errorId, error });
+        await this.localWriter.write({ timestamp: new Date().toISOString(), level: "error", errorId, error, conversation });
         this.ctx.logger("[本地日志]").info(`错误 ${errorId} 的本地日志目录：${this.localWriter.directory}`);
     }
 

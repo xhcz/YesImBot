@@ -12,6 +12,7 @@ import { isReadOnlyTool } from "../extension/helpers";
 import { toolJSONSchema } from "../extension/json-schema";
 import type { LoggerService } from "../logger";
 import { withConversationLog } from "../logger/conversation";
+import { isConversationReportEnabled, recordConversationReport } from "../logger/conversation-report";
 import { ChatModelSwitcher } from "../model";
 import type { ValidationOptions } from "../model/chat-model";
 import { withUsageScope } from "../model/usage";
@@ -161,10 +162,12 @@ export class HeartbeatProcessor {
                 }
             } catch (error) {
                 if (isReplyTurnCancelled()) break;
+                recordConversationReport("turn_failed", { turnId, heartbeat: heartbeatCount, replySent: success });
                 handleError(this.logger, error, `回复轮次 · 第 ${heartbeatCount} 次模型决策`);
                 shouldContinueHeartbeat = false;
             }
         }
+        recordConversationReport("turn_finished", { turnId, replySent: success });
         return success;
     }
 
@@ -392,6 +395,14 @@ export class HeartbeatProcessor {
         const consumedSourceIds = [...l1.processed_events, ...l1.new_events].flatMap((item) =>
             item.type === "message" || item.type === "system_event" ? [JSON.stringify([item.type, item.id])] : [],
         );
+        if (isConversationReportEnabled()) {
+            recordConversationReport(
+                "history_sources",
+                [...l1.processed_events, ...l1.new_events].flatMap((item) =>
+                    item.type === "message" ? [{ messageId: item.id, quoteId: item.quoteId, userId: item.sender.id }] : [],
+                ),
+            );
+        }
         return { messages, manualRecallIds, consumedSourceIds, fallbackMessages };
     }
 
@@ -863,14 +874,17 @@ export class HeartbeatProcessor {
         return { continue: !actions.some((action) => action.function === "send_message"), replySent };
     }
 
-    private invokeAction(
+    private async invokeAction(
         turnId: string,
         action: { function: string; params: Record<string, unknown> },
         session: Session,
         attachedImageIds: readonly string[] = [],
         actionId?: string,
     ) {
-        return this.toolService.invoke(action.function, action.params, session, { requestId: turnId, actionId, attachedImageIds });
+        recordConversationReport("tool_call", { turnId, actionId, ...action });
+        const result = await this.toolService.invoke(action.function, action.params, session, { requestId: turnId, actionId, attachedImageIds });
+        recordConversationReport("tool_result", { turnId, actionId, function: action.function, result });
+        return result;
     }
 
     private isReadOnlyAction(name: string, session: Session, params: Record<string, unknown>) {
