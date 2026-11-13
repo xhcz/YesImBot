@@ -68,8 +68,33 @@ function faceMarkup(content: string, segments: h[] = []) {
         .join("");
 }
 
+const plainText = (items: h[]) =>
+    items
+        .map((element) => element.attrs.content ?? "")
+        .join("")
+        .trim();
+
+/** Some OneBot bridges include both the QQ Markdown and its plain projection. */
+export function deduplicateOneBotMarkdown(content: string): string {
+    const elements = h.parse(content);
+    const index = elements.findIndex((element) => element.type !== "quote");
+    const markdown = elements[index];
+    if (markdown?.type !== "markdown" || typeof markdown.attrs.content !== "string") return content;
+    const plain = elements.slice(index + 1);
+    if (!plain.length || plain.some((element) => !["text", "at"].includes(element.type))) return content;
+    const text = markdown.attrs.content as string;
+    const mention = /^\[@[^\]\n]+\]\(mqqapi:\/\/markdown\/mention\?at_type=1&at_tinyid=(\d+)\)([\s\S]*)$/.exec(text);
+    if (mention) {
+        if (plain[0].type !== "at" || String(plain[0].attrs.id) !== mention[1]) return content;
+        if (plain.slice(1).some((element) => element.type !== "text") || plainText(plain.slice(1)) !== mention[2].trim()) return content;
+    } else if (plain.some((element) => element.type !== "text") || plainText(plain) !== text.trim()) {
+        return content;
+    }
+    return elements.filter((_, position) => position !== index).join("");
+}
+
 /** Normalize the model/history copy only, leaving other Koishi plugins' sessions intact. */
-export async function normalizeOneBotMessageContent(session: Session, content = session.content ?? ""): Promise<string> {
+async function normalizeOneBotFaces(session: Session, content = session.content ?? ""): Promise<string> {
     if (session.platform !== "onebot") return content;
     const payload: unknown = session.onebot ?? session.event?._data;
     if (!record(payload) || (!Array.isArray(payload.message) && typeof payload.message !== "string")) return faceMarkup(content);
@@ -109,4 +134,9 @@ export async function normalizeOneBotMessageContent(session: Session, content = 
     // Detached quotes have their own provenance; do not enrich their faces with
     // metadata belonging to the current message's identical face IDs.
     return prefix ? faceMarkup(prefix) + faceMarkup(body, segments) : faceMarkup(content, segments);
+}
+
+export async function normalizeOneBotMessageContent(session: Session, content = session.content ?? ""): Promise<string> {
+    if (session.platform !== "onebot") return content;
+    return deduplicateOneBotMarkdown(await normalizeOneBotFaces(session, content));
 }
