@@ -171,7 +171,7 @@ export class HistoryCommandManager {
 
         historyCmd
             .subcommand(".clear", "清除指定频道的历史记录", { authority: 3 })
-            .option("all", "-a <type:string> 清理全部指定类型的频道 (private, guild, all)")
+            .option("all", "-a <type:string> 清理全部指定类型的频道（private、guild、all），不能与 -p、-c、-t 混用")
             .option("platform", "-p <platform:string> 指定平台")
             .option("channel", "-c <channel:string> 指定频道ID (多个用逗号分隔)")
             .option("target", "-t <target:string> 指定目标 'platform:channelId' (多个用逗号分隔)")
@@ -299,6 +299,8 @@ export class HistoryCommandManager {
                 };
 
                 if (options.all !== undefined) {
+                    if (options.platform !== undefined || options.channel !== undefined || options.target !== undefined)
+                        return "错误：批量清理 -a 不能与 -p、-c 或 -t 同时使用。请单独指定清理范围。";
                     if (options.all !== "private" && options.all !== "guild" && options.all !== "all")
                         return "错误：-a 的参数必须是 'private', 'guild', 或 'all'";
                     let query: Query.Expr<MessageData> = {};

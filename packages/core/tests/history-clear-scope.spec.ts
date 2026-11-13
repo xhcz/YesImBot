@@ -159,3 +159,13 @@ it("channel cleanup reports retained legacy rows instead of claiming the whole f
     expect(result).not.toContain("Agent日志文件已删除");
     expect(await fs.readFile(path.join(logRoot, "qq/private_alice.agent.jsonl"), "utf8")).toBe('{"type":"agent_thought"}\n');
 });
+
+it.each([{ platform: "onebot" }, { channel: "group" }, { target: "onebot:group" }])(
+    "rejects a bulk clear combined with a target selector (%o)",
+    async (selector) => {
+        const { invoke, exists, files, removals } = await fixture();
+        expect(await invoke({ all: "all", ...selector })).toContain("不能与");
+        expect(removals).toHaveLength(0);
+        expect(await Promise.all(files.map(exists))).toEqual(files.map(() => true));
+    },
+);
