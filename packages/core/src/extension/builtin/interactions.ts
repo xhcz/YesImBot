@@ -62,6 +62,7 @@ export default class InteractionsExtension {
 
     @Tool({
         name: "essence_create",
+        modelReplacement: "essence",
         description: `在当前频道将一个消息设置为精华消息。常在你认为某个消息十分重要或过于典型时使用。`,
         parameters: withInnerThoughts({
             message_id: Schema.string().required().description("消息 ID"),
@@ -83,6 +84,7 @@ export default class InteractionsExtension {
 
     @Tool({
         name: "essence_delete",
+        modelReplacement: "essence",
         description: `在当前频道将一个消息从精华中移除。`,
         parameters: withInnerThoughts({
             message_id: Schema.string().required().description("消息 ID"),
@@ -100,6 +102,21 @@ export default class InteractionsExtension {
             this.ctx.logger.error(`Bot[${session.selfId}]从精华中移除消息失败: ${message_id} - `, error.message);
             return Failed(`从精华中移除消息失败： ${error.message}`);
         }
+    }
+
+    @Tool({
+        name: "essence",
+        description: "设置或取消当前会话的精华消息。action=set 设置，action=remove 取消。",
+        supersedes: ["essence_create", "essence_delete"],
+        actionAliases: { set: "essence_create", remove: "essence_delete" },
+        parameters: withInnerThoughts({
+            action: Schema.union(["set", "remove"]).required(),
+            message_id: Schema.string().required().description("消息 ID"),
+        }),
+        isSupported: (session) => session.platform === "onebot",
+    })
+    async essence(_args: Infer<{ action: "set" | "remove"; message_id: string }>) {
+        return Failed("请通过工具服务调用精华操作");
     }
 
     @Tool({

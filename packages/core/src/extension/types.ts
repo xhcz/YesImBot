@@ -63,6 +63,8 @@ export interface ToolMetadata<TParams> {
     modelReplacement?: string;
     /** Model catalog aliases this tool is designed to replace. */
     supersedes?: readonly string[];
+    /** Dispatch an explicit action through an existing, independently authorized tool. */
+    actionAliases?: Readonly<Record<string, string>>;
     /** Explicit opt-in for independent background reads; sends and mutations remain serial. */
     background?: boolean;
     /** Explicitly safe to give failed reads back to the model for another bounded decision. */
@@ -83,6 +85,8 @@ export interface ToolMetadata<TParams> {
 export interface ToolDefinition<TParams = any> {
     modelReplacement?: string;
     supersedes?: readonly string[];
+    /** Dispatch an explicit action through an existing, independently authorized tool. */
+    actionAliases?: Readonly<Record<string, string>>;
     background?: boolean;
     /** Explicitly safe to give failed reads back to the model for another bounded decision. */
     readOnly?: boolean | ((params: Record<string, unknown>) => boolean);

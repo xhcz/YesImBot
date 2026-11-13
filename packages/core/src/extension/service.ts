@@ -611,6 +611,18 @@ export class ToolService extends YesImBotService<Config> {
     }
 
     public async invoke(functionName: string, params: Record<string, unknown>, session?: Session, toolContext?: ToolExecutionContext): Promise<ToolCallResult> {
+        const group = this.getTool(functionName, session, toolContext);
+        if (group?.actionAliases) {
+            let validated: Record<string, unknown>;
+            try {
+                validated = group.parameters(params);
+            } catch (error) {
+                return Failed(`Parameter validation failed: ${error.message}`);
+            }
+            const { action, ...operationParams } = validated;
+            if (typeof action !== "string" || !Object.hasOwn(group.actionAliases, action)) return Failed("指定动作在当前会话不可用");
+            return this.invoke(group.actionAliases[action], operationParams, session, toolContext);
+        }
         const scopedBackground = toolContext?.backgroundExecution || functionName.startsWith("background_task_");
         const startedAt = new Date(),
             requestId = randomUUID();
@@ -998,7 +1010,21 @@ export class ToolService extends YesImBotService<Config> {
             if (typeof owner?.filter === "function" && !owner.filter(session)) return undefined;
             if (tool.isSupported && !tool.isSupported(session)) return undefined;
         }
+        if (tool.actionAliases && !Object.values(tool.actionAliases).every((name) => this.isActionAvailable(tool, name, session, toolContext)))
+            return undefined;
         return tool;
+    }
+
+    private isActionAvailable(group: ToolDefinition, name: string, session?: Session, context?: ToolExecutionContext): boolean {
+        const operation = this.tools.get(name);
+        return (
+            !!operation &&
+            !operation.actionAliases &&
+            operation.modelReplacement === group.name &&
+            group.supersedes?.includes(name) === true &&
+            this.toolOwners.get(group.name)?.context === this.toolOwners.get(name)?.context &&
+            this.getTool(name, session, context) === operation
+        );
     }
 
     public getAvailableTools(session?: Session, toolContext?: ToolExecutionContext, audience?: "model"): ToolDefinition[] {
