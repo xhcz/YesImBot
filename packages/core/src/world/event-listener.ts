@@ -18,6 +18,7 @@ interface PendingCommand {
     invokerId: string;
     timestamp: number;
     session: Session;
+    configCommand?: boolean;
 }
 
 export class EventListenerManager {
@@ -25,6 +26,7 @@ export class EventListenerManager {
     private readonly pendingCommands = new Map<string, PendingCommand[]>();
     private cleanupTimer?: () => void;
     private generation = 0;
+    private readonly configReplies = new WeakSet<Session>();
     private logger: Logger;
 
     constructor(
@@ -82,6 +84,11 @@ export class EventListenerManager {
 
                 if (session.author?.isBot) return next();
 
+                // Configuration command arguments may contain a new credential. Keep
+                // the command audit event, but never write the command message body.
+                const parsed = session.argv;
+                const command = parsed?.command ?? (parsed ? this.ctx.$commander.inferCommand({ ...parsed, tokens: parsed.tokens?.slice() }) : undefined);
+                if (isConfigCommand(command?.name)) return next();
                 await this.recordUserMessage(session);
                 const result = await next();
 
@@ -235,6 +242,7 @@ export class EventListenerManager {
         const { session, command, source } = argv;
         if (!session || !command) return;
         const generation = this.generation;
+        const configCommand = isConfigCommand(command.name);
 
         this.logger.info(`记录指令调用 | 用户: ${session.author.name || session.userId} | 指令: ${command.name} | 频道: ${conversationCid(session)}`);
         const commandEventId = `cmd_invoked_${session.messageId || "call"}_${Random.id()}`;
@@ -256,7 +264,7 @@ export class EventListenerManager {
                 target: { platform: session.platform, selfId: session.selfId, channelId: session.channelId },
                 invokedAt: new Date().toISOString(),
                 name: command.name,
-                source,
+                ...(configCommand ? {} : { source }),
                 invoker: { pid: session.userId, name: session.author.nick || session.author.name },
             },
             message: `系统提示：用户 "${session.author.name || session.userId}" 调用了指令 "${command.name}"`,
@@ -274,6 +282,7 @@ export class EventListenerManager {
             invokerId: session.userId ?? "",
             timestamp: Date.now(),
             session,
+            configCommand,
         });
         this.pendingCommands.set(key, pendingList);
     }
@@ -299,10 +308,16 @@ export class EventListenerManager {
         const [pendingCmd] = pendingInChannel.splice(pendingIndex, 1);
         if (!pendingInChannel.length) this.pendingCommands.delete(key);
         this.logger.debug(`匹配到指令结果 | 事件ID: ${pendingCmd.commandEventId}`);
+        if (pendingCmd.configCommand) this.configReplies.add(session);
 
         const [existingEvent] = await this.ctx.database.get(TableName.SystemEvents, { id: pendingCmd.commandEventId });
         if (existingEvent) {
-            const updatedPayload = { ...existingEvent.payload, status: "response-observed", returnedAt: new Date().toISOString(), result: session.content };
+            const updatedPayload = {
+                ...existingEvent.payload,
+                status: "response-observed",
+                returnedAt: new Date().toISOString(),
+                ...(pendingCmd.configCommand ? {} : { result: session.content }),
+            };
             await this.ctx.database.set(TableName.SystemEvents, { id: pendingCmd.commandEventId }, { payload: updatedPayload });
         }
     }
@@ -359,7 +374,15 @@ export class EventListenerManager {
     }
 
     private async recordBotSentMessage(session: Session): Promise<void> {
-        if ((typeof this.ctx.filter === "function" && !this.ctx.filter(session)) || !session.content || !session.messageId) return;
+        if (
+            this.configReplies.has(session) ||
+            session.scope === "commands.conf" ||
+            session.scope?.startsWith("commands.conf.") ||
+            (typeof this.ctx.filter === "function" && !this.ctx.filter(session)) ||
+            !session.content ||
+            !session.messageId
+        )
+            return;
 
         // Bind the event before channel lookup or media processing can outlive a reset.
         const generation = this.service.l2_manager?.getHistoryGeneration({
@@ -413,4 +436,8 @@ export class EventListenerManager {
 /** 兼容旧适配器的角色 ID 数组及新版 Satori 的角色对象数组。 */
 function roleIds(roles?: ReadonlyArray<string | { id: string }>): string[] | undefined {
     return roles?.map((role) => (typeof role === "string" ? role : role.id));
+}
+
+function isConfigCommand(name?: string): boolean {
+    return name === "conf" || name?.startsWith("conf.") === true;
 }

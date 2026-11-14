@@ -2,6 +2,7 @@ import { GenerateTextResult } from "@xsai/generate-text";
 import { Context, Logger, Schema } from "koishi";
 
 import { ContextBudgetError } from "../agent/context-budget";
+import { isModelReference } from "../commands/config-check";
 import { Config } from "../config";
 import type { LoggerService } from "../logger";
 import { AppError, ErrorDefinitions } from "../shared/errors";
@@ -205,7 +206,7 @@ export class ModelService extends YesImBotService<Config> {
         const groupName = this.resolveGroupName(name);
         if (!groupName) return undefined;
 
-        const group = this.config.modelGroups.find((g) => g.name === groupName);
+        const group = this.config.modelGroups.find((g) => g?.name === groupName);
         if (!group) {
             this.logger.warn(`查找模型组失败 | 组名不存在: ${groupName}`);
             return undefined;
@@ -234,9 +235,14 @@ export class ModelService extends YesImBotService<Config> {
             });
         }
 
-        for (const providerConfig of this.config.providers) {
-            if (providerConfig.models.length === 0) {
-                throw new Error(`配置错误: 提供商 ${providerConfig.name} 至少需要配置一个模型`);
+        for (const [index, provider] of this.config.providers.entries()) {
+            if (!provider || typeof provider.name !== "string" || !provider.name.trim() || !Array.isArray(provider.models) || !provider.models.length) {
+                throw new AppError(ErrorDefinitions.CONFIG.INVALID, { args: [`providers[${index}] 缺少提供商名称或模型列表`] });
+            }
+            for (const [modelIndex, model] of provider.models.entries()) {
+                if (!model || typeof model.modelId !== "string" || !model.modelId.trim()) {
+                    throw new AppError(ErrorDefinitions.CONFIG.INVALID, { args: [`providers[${index}].models[${modelIndex}].modelId 缺少有效的模型 ID`] });
+                }
             }
         }
 
@@ -251,11 +257,14 @@ export class ModelService extends YesImBotService<Config> {
         }
 
         const names = new Set<string>();
-        for (const group of this.config.modelGroups) {
+        for (const [index, group] of this.config.modelGroups.entries()) {
+            if (!group || typeof group.name !== "string" || !group.name.trim() || !Array.isArray(group.models) || !group.models.length) {
+                throw new AppError(ErrorDefinitions.CONFIG.INVALID, { args: [`modelGroups[${index}] 缺少名称或有效模型列表`] });
+            }
             if (names.has(group.name)) throw new AppError(ErrorDefinitions.CONFIG.INVALID, { args: [`模型组名称重复: ${group.name}`] });
             names.add(group.name);
-            if (group.models.length === 0) {
-                throw new Error(`配置错误: 模型组 ${group.name} 至少需要包含一个模型`);
+            for (const [modelIndex, ref] of group.models.entries()) {
+                if (!isModelReference(ref)) this.logger.warn(`忽略无效的模型引用：modelGroups[${index}].models[${modelIndex}]`);
             }
         }
 
@@ -263,9 +272,10 @@ export class ModelService extends YesImBotService<Config> {
 
         const supportsEmbedding = (group: NonNullable<typeof defaultGroup>) =>
             group.models.some((descriptor) => {
+                if (!isModelReference(descriptor)) return false;
                 const provider = this.config.providers.find((p) => p.name === descriptor.providerName);
                 const model = provider?.models.find((m) => m.modelId === descriptor.modelId);
-                if (!provider || !model?.abilities.includes(ModelAbility.Embedding)) return false;
+                if (!provider || !model?.abilities?.includes(ModelAbility.Embedding)) return false;
                 try {
                     return !!ProviderFactoryRegistry.get(provider.type)?.createClient(provider).embed;
                 } catch {
@@ -308,7 +318,7 @@ export class ModelService extends YesImBotService<Config> {
             Schema.union([
                 ...this.config.providers.flatMap((p) =>
                     p.models
-                        .filter((m) => m.abilities.includes(ModelAbility.Evaluation))
+                        .filter((m) => m.abilities?.includes(ModelAbility.Evaluation))
                         .map((m) => Schema.const({ providerName: p.name, modelId: m.modelId }).description(`${p.name} / ${m.modelId}`)),
                 ),
                 Schema.object({ providerName: Schema.string(), modelId: Schema.string() }).description("自定义评估模型"),
@@ -356,11 +366,11 @@ export class ModelService extends YesImBotService<Config> {
     }
 
     public useEmbeddingGroup(name: string): ModelSwitcher<IEmbedModel> | undefined {
-        if (name === TaskType.Embedding && !this.config.task[name] && !this.config.modelGroups.some((group) => group.name === name)) return undefined;
+        if (name === TaskType.Embedding && !this.config.task[name] && !this.config.modelGroups.some((group) => group?.name === name)) return undefined;
         const groupName = this.resolveGroupName(name);
         if (!groupName) return undefined; // resolveGroupName 内部会记录日志
 
-        const group = this.config.modelGroups.find((g) => g.name === groupName);
+        const group = this.config.modelGroups.find((g) => g?.name === groupName);
         if (!group) {
             this.logger.warn(`查找模型组失败 | 组名不存在: ${groupName}`);
             return undefined;
@@ -378,7 +388,7 @@ export class ModelService extends YesImBotService<Config> {
         if (Object.hasOwn(this.config.task, name) && (this.config.task as Record<string, string>)[name]) {
             return (this.config.task as Record<string, string>)[name];
         }
-        if (this.config.modelGroups.some((group) => group.name === name)) return name;
+        if (this.config.modelGroups.some((group) => group?.name === name)) return name;
 
         this.logger.warn(`[切换器] ⚠ 无效的任务或模型组名称 | 名称: ${String(name)}`);
         return undefined;
@@ -623,7 +633,8 @@ export class ModelSwitcher<T extends BaseModel> {
         this.logger = logging.getLogger(`[模型组][${groupConfig.name}]`);
 
         const breakersByIdentity = new Map<string, CircuitBreaker>();
-        this._models = groupConfig.models
+        this._models = (groupConfig.models ?? [])
+            .filter(isModelReference)
             .map((desc) => {
                 const model = modelGetter(desc.providerName, desc.modelId);
                 if (model?.config.circuitBreakerPolicy) {
