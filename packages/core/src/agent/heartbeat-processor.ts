@@ -851,6 +851,7 @@ export class HeartbeatProcessor {
             assertReplyTurn();
             if (
                 action.function === "send_message" &&
+                result.metadata?.intentionalSilence !== true &&
                 (result.status === "success" || result.metadata?.delivery?.messageIds?.some((id: unknown) => typeof id === "string" && id.trim()))
             ) {
                 replySent = true;
@@ -864,6 +865,8 @@ export class HeartbeatProcessor {
                 error: result.error,
                 metadata: result.metadata,
             });
+            if (action.function === "send_message" && result.status === "success" && result.metadata?.intentionalSilence === true)
+                return { continue: false, replySent };
             if (result.status !== "success") {
                 this.logger.warn(
                     `工具失败 | 工具: ${action.function} | 类型: ${result.error?.code ?? result.error?.name ?? "ToolError"} | ${result.error?.message ?? "未知错误"}`,
@@ -933,6 +936,7 @@ export class HeartbeatProcessor {
             assertReplyTurn();
             if (
                 action.function === "send_message" &&
+                result.metadata?.intentionalSilence !== true &&
                 (result.status === "success" || result.metadata?.delivery?.messageIds?.some((id: unknown) => typeof id === "string" && id.trim()))
             ) {
                 replySent = true;
@@ -946,6 +950,8 @@ export class HeartbeatProcessor {
                 error: result.error,
                 metadata: result.metadata,
             });
+            if (action.function === "send_message" && result.status === "success" && result.metadata?.intentionalSilence === true)
+                return { replySent, retryRead: false, stop: true };
             if (result.status !== "success") {
                 this.logger.warn(
                     `工具失败 | 工具: ${action.function} | 类型: ${result.error?.code ?? result.error?.name ?? "ToolError"} | ${result.error?.message ?? "未知错误"}`,

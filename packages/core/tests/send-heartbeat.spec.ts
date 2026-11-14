@@ -389,3 +389,31 @@ for (const streamAction of [false, true]) {
         expect(invocations).toBe(1);
     });
 }
+
+it.each(["json", "stream", "native"])("ends an intentionally silent %s turn without reporting a delivery", async (mode) => {
+    const logger = { debug() {}, info() {}, warn() {}, error() {}, success() {} };
+    const definition = { name: "send_message", description: "send", parameters: Schema.object({ message: Schema.string().required() }) };
+    const response = JSON.stringify({ thoughts: {}, actions: [{ function: "send_message", params: { message: "" } }], request_heartbeat: true });
+    let requests = 0;
+    const processor = new HeartbeatProcessor(stubCtx(), { heartbeat: 3, nativeToolCalling: mode === "native", streamAction: mode === "stream" } as any, {
+        model: {
+            chat: async () => {
+                requests++;
+                return mode === "native" ? { toolCalls: [{ toolCallId: "call", toolName: "send_message", args: '{"message":""}' }] } : { text: response };
+            },
+        } as any,
+        prompt: {} as any,
+        tool: {
+            getAvailableTools: () => [definition],
+            getTool: () => definition,
+            invoke: async () => ({ status: "success", metadata: { intentionalSilence: true } }),
+        } as any,
+        l1: { recordThought: async () => {}, recordHeartbeat: async () => {}, recordAction: async () => "action", recordObservation: async () => {} } as any,
+        contextBuilder: {} as any,
+        logging: loggingStub(logger),
+        world: {} as unknown as WorldStateService,
+    });
+    (processor as any)._prepareLlmRequest = async () => ({ messages: [] });
+    expect(await processor.runCycle({ session: { platform: "qq", channelId: "group", cid: "qq:group" } } as any)).toBe(false);
+    expect(requests).toBe(1);
+});

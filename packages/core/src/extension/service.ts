@@ -34,6 +34,8 @@ const backgroundToolChoices = new WeakMap<object, Map<ToolService, ToolDefinitio
 function toolEventSummary(name: string, result: ToolCallResult): string {
     const operation = name.replace(/\p{Cc}/gu, "").slice(0, 128);
     const state = result.metadata?.execution?.timedOut ? "执行超时" : result.status === "success" ? "已返回成功回执" : "已返回失败回执";
+    if (name === "send_message" && result.status === "success" && result.metadata?.intentionalSilence === true)
+        return `工具 ${operation} 已结束发送动作，本次保持沉默。`;
     const delivery = result.metadata?.delivery;
     if (name !== "send_message" || !delivery) return `工具 ${operation} ${state}。`;
     const count = Array.isArray(delivery.messageIds) ? new Set(delivery.messageIds.filter((id: unknown) => typeof id === "string" && id.trim())).size : 0;

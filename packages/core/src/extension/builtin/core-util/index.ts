@@ -82,10 +82,11 @@ export default class CoreUtilExtension {
             return Failed("缺少会话对象");
         }
 
+        if (typeof message !== "string") return Failed("message 必须是字符串");
         const messages = message.split("<sep/>").filter((msg) => msg.trim() !== "");
         if (messages.length === 0) {
-            this.logger.warn("💬 待发送内容为空 | 原因: 消息分割后无有效内容");
-            return Failed("消息内容为空");
+            this.logger.debug("空消息 · 本轮保持沉默");
+            return Success(undefined, { intentionalSilence: true });
         }
 
         const delivery = { messageIds: [] as string[], sentMessages: 0, totalMessages: messages.length, inFlight: false, deliveryUnknown: false };
