@@ -136,34 +136,38 @@ export class EventListenerManager {
     }
 
     private async handleNotice(session: Session): Promise<void> {
+        const target = {
+            platform: session.platform,
+            channelId: conversationChannelId(session)!,
+            channelType: session.isDirect ? ("private" as const) : ("guild" as const),
+        };
+        const generation = this.service.l2_manager?.getHistoryGeneration(target);
         await this.service.observeChannel(session);
-        switch (session.subtype) {
-            case "poke":
-                const authorId = session.event._data.user_id;
-                const targetId = session.event._data.target_id;
-                const action = session.event._data.action;
-                const suffix = session.event._data.suffix;
+        if (session.subtype !== "poke") return;
 
-                const payload: Partial<SystemEventData> = {
-                    type: "notice-poke",
-                    payload: {
-                        details: { authorId, targetId, action, suffix },
+        const raw = session.event._data;
+        const authorId = raw?.user_id ?? session.userId;
+        const targetId = raw?.target_id;
+        const action = typeof raw?.action === "string" ? raw.action.trim() : "";
+        const suffix = typeof raw?.suffix === "string" ? raw.suffix.trim() : "";
+        await this.service.recordSystemEvent(
+            {
+                id: `sysevt_poke_${Random.id()}`,
+                ...target,
+                type: "notice-poke",
+                timestamp: new Date(),
+                payload: {
+                    details: {
+                        ...(authorId !== undefined && { authorId }),
+                        ...(targetId !== undefined && { targetId }),
+                        ...(action && { action }),
+                        ...(suffix && { suffix }),
                     },
-                    message: `系统提示：${authorId} ${action} ${targetId} ${suffix}`,
-                };
-                this.service.recordSystemEvent({
-                    id: `sysevt_poke_${Random.id()}`,
-                    platform: session.platform,
-                    channelId: conversationChannelId(session),
-                    channelType: session.isDirect ? "private" : "guild",
-                    timestamp: new Date(),
-                    ...payload,
-                } as SystemEventData);
-
-                break;
-            default:
-                break;
-        }
+                },
+                message: `系统提示：${authorId ?? "有人"} ${action || "戳了戳"} ${targetId ?? "一位用户"}${suffix ? ` ${suffix}` : ""}`,
+            },
+            generation,
+        );
     }
 
     private async handleGuildMember(session: Session): Promise<void> {

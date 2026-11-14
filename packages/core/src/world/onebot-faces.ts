@@ -61,9 +61,15 @@ function faceMarkup(content: string, segments: h[] = []) {
         list.push(segment.attrs);
         faces.set(key, list);
     }
+    const forward = (attrs: Record<string, unknown>, children: h[]) => {
+        if (typeof attrs.content !== "string" || !/^\[object Object\](?:,\s*\[object Object\])*$/.test(attrs.content)) return true;
+        const { content: _, ...rest } = attrs;
+        return h("forward", rest, h.transform(children, { forward }));
+    };
     return h
         .transform(h.parse(content), {
             face: (attrs) => oneBotFaceElement({ ...attrs, ...faces.get(String(attrs.id))?.shift() }),
+            forward,
         })
         .join("");
 }
