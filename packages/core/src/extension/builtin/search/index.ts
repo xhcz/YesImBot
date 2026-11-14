@@ -282,6 +282,7 @@ export default class SearchExtension {
 
         if (isEmpty(query)) return Failed("query is required");
 
+        let stage: "请求" | "解码" | "整理" = "请求";
         try {
             const endpoint = this.config.endpoint;
             const engines = this.config.sources.join(",");
@@ -303,9 +304,12 @@ export default class SearchExtension {
             });
 
             args.toolContext?.reportProgress?.("搜索服务已返回，正在整理结果");
+            stage = "解码";
             // 处理响应
             const data = typeof response === "string" ? JSON.parse(response) : response;
 
+            if (!data || !Array.isArray(data.results)) throw new TypeError("invalid search response");
+            stage = "整理";
             // 格式化搜索结果
             if (!data.results || data.results.length === 0) {
                 return Success(`没有找到关于"${query}"的搜索结果。`);
@@ -341,12 +345,27 @@ export default class SearchExtension {
             }
 
             return Success(resultText);
-        } catch (error: any) {
-            if (!error.response && error.message.includes("timeout")) {
-                return Failed({ name: "TimeoutError", message: "搜索请求超时", retryable: true });
-            }
-            this.logger.debug(`搜索请求失败 · ${error.response?.status ?? error.name ?? "未知错误"}`);
-            return Failed(`搜索过程中发生错误: ${error.message}`);
+        } catch (error) {
+            const status = error?.response?.status;
+            const code = error?.code ?? error?.cause?.code;
+            const timedOut = typeof status !== "number" && (code === "ETIMEDOUT" || error?.name === "TimeoutError");
+            const retryableStatus = typeof status === "number" && (status === 408 || status === 429 || (status >= 500 && status < 600));
+            const networkCodes = ["EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"];
+            const networkCode = typeof code === "string" && networkCodes.includes(code) ? code : undefined;
+            if (error instanceof SyntaxError) stage = "解码";
+            const detail = args.toolContext?.signal?.aborted
+                ? "已取消"
+                : timedOut
+                  ? "搜索请求超时"
+                  : typeof status === "number"
+                    ? `HTTP ${status}`
+                    : (networkCode ?? "未返回可用的搜索结果");
+            this.logger.debug(`搜索服务 · ${stage}失败 · ${detail}`);
+            return Failed({
+                name: timedOut ? "TimeoutError" : "SearchError",
+                message: timedOut ? detail : `搜索服务${stage}失败：${detail}`,
+                retryable: !args.toolContext?.signal?.aborted && (timedOut || retryableStatus || !!networkCode),
+            });
         }
     }
 }

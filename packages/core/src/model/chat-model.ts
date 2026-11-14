@@ -151,26 +151,29 @@ export class ChatModel extends BaseModel implements IChatModel {
             `[${requestId}] 模型请求 · ${useStream ? "流式" : "非流式"} · ${options.requestPurpose ?? "用途未标注"}${imageCount ? ` · 附带 ${imageCount} 张图片` : ""}`,
         );
 
+        let streamDiagnostics: (() => Record<string, unknown>) | undefined;
         try {
             return await withModelConversationReport(
                 { requestId, provider: this.config.providerName, model: this.id, purpose: options.requestPurpose ?? "对话" },
                 () =>
                     withUsageScope({ contextBudget: budget.report }, () =>
                         useStream
-                            ? this._executeStream(chatOptions, options.onStreamStart, options.validation, requestId, options.singleStep)
+                            ? this._executeStream(chatOptions, options.onStreamStart, options.validation, requestId, options.singleStep, (read) => {
+                                  streamDiagnostics = read;
+                              })
                             : this._executeNonStream(chatOptions, options.singleStep, options.validation, requestId),
                     ),
             );
         } catch (error) {
             this.logger.debug(
-                `[${requestId}] 请求异常 | 类型: ${error.name} | 错误码: ${error.code ?? "未知"} | 已取消: ${options.abortSignal?.aborted ?? false}`,
+                `[${requestId}] 请求异常 | 类型: ${error?.name ?? typeof error} | 错误码: ${error?.code ?? "未知"} | 已取消: ${options.abortSignal?.aborted ?? false}`,
             );
             if (options.abortSignal?.aborted && options.abortSignal.reason?.name !== "TimeoutError") {
                 this.logger.debug(`[${requestId}] 调用方已取消请求 | 用途: ${options.requestPurpose ?? "未标注"} | 不作为服务商故障重试`);
                 throw options.abortSignal.reason ?? error;
             }
             const timeoutReason = options.abortSignal?.reason;
-            return await this._wrapAndThrow(timeoutReason?.name === "TimeoutError" ? timeoutReason : error, chatOptions);
+            return await this._wrapAndThrow(timeoutReason?.name === "TimeoutError" ? timeoutReason : error, requestId, useStream, streamDiagnostics?.());
         }
     }
 
@@ -283,6 +286,7 @@ export class ChatModel extends BaseModel implements IChatModel {
         validation?: ValidationOptions,
         requestId = "stream",
         singleStep = false,
+        reportDiagnostics?: (read: () => Record<string, unknown>) => void,
     ): Promise<GenerateTextResult> {
         const stime = Date.now();
         let streamStarted = false;
@@ -299,6 +303,7 @@ export class ChatModel extends BaseModel implements IChatModel {
         let completion = new StreamCompletion();
         let buffer: string[] = [];
         let diagnostics = new StreamDiagnostics(stime);
+        reportDiagnostics?.(() => diagnostics.summary());
         const markStreamStarted = () => {
             if (streamStarted) return;
             onStreamStart?.();
@@ -475,11 +480,11 @@ export class ChatModel extends BaseModel implements IChatModel {
                 })();
             }
         } catch (error) {
-            this.logger.debug(`[${requestId}] 流式异常 · ${error.name}`);
+            this.logger.debug(`[${requestId}] 流式异常 · ${error?.name ?? typeof error}`);
             const summary = diagnostics.summary();
             if (!(error instanceof AppError) && (summary.errorFrames || summary.malformedFrames)) {
                 throw new AppError(ErrorDefinitions.LLM.REQUEST_FAILED, {
-                    args: [error.message],
+                    args: [error?.message || "SSE 协议异常"],
                     cause: error,
                     context: { streamDiagnostics: summary },
                 });
@@ -503,9 +508,17 @@ export class ChatModel extends BaseModel implements IChatModel {
         }
 
         if (isEmpty(finalText) && finalToolCalls.length === 0) {
-            this.logger.debug(`[${requestId}] SSE 无有效正文或工具调用`);
+            const summary = diagnostics.summary();
+            const emptyOutput = summary.reasoningChars
+                ? "reasoning_only"
+                : summary.contentChars
+                  ? "blank_text"
+                  : summary.frames
+                    ? "no_output_frames"
+                    : "no_frames";
+            this.logger.debug(`[${requestId}] SSE 无有效正文或工具调用 · ${emptyOutput}`);
             throw new AppError(ErrorDefinitions.LLM.OUTPUT_EMPTY_CONTENT, {
-                context: { rawResponse: finalText, details: "模型未输出有效内容", streamDiagnostics: diagnostics.summary() },
+                context: { rawResponse: finalText, details: "模型未输出有效内容", emptyOutput, streamDiagnostics: summary },
             });
         }
 
@@ -554,13 +567,14 @@ export class ChatModel extends BaseModel implements IChatModel {
         return null;
     }
 
-    private async _wrapAndThrow(error: any, options: ChatOptions): Promise<never> {
+    private async _wrapAndThrow(error: any, requestId: string, isStream: boolean, streamDiagnostics?: Record<string, unknown>): Promise<never> {
         // 始终附加基础上下文信息
         const context: Record<string, any> = {
             modelId: this.id,
             provider: this.config.providerName,
-            baseURL: options.baseURL,
-            isStream: options.stream,
+            requestId,
+            isStream,
+            ...(streamDiagnostics ? { streamDiagnostics, httpStatus: streamDiagnostics.httpStatus } : {}),
         };
 
         // 1. 如果错误已经是我们自定义的 AppError，直接附加上下文并重新抛出
@@ -569,8 +583,8 @@ export class ChatModel extends BaseModel implements IChatModel {
             throw error;
         }
 
-        // 2. 处理 AbortError，通常由超时引起
-        if (error.name === "AbortError" || error.name === "TimeoutError" || error.message === "timeout") {
+        // An upstream AbortError alone does not indicate a request timeout.
+        if (error?.name === "TimeoutError" || /^(?:request )?(?:timeout|timed out)$/i.test(error?.message ?? "")) {
             const seconds = typeof error.duration === "number" && Number.isFinite(error.duration) && error.duration > 0 ? error.duration : undefined;
             const duration = seconds === undefined ? "（上游未提供时限）" : ` (${seconds}s)`;
             if (seconds !== undefined) context.timeoutSeconds = seconds;
@@ -578,9 +592,13 @@ export class ChatModel extends BaseModel implements IChatModel {
             throw new AppError(ErrorDefinitions.LLM.TIMEOUT, { args: [seconds], cause: error, context });
         }
 
-        if (error.name === "XSAIError" && error.response) {
-            const { status, url } = error.response;
-            context["url"] = url;
+        if (error?.name === "AbortError") {
+            this.logger.debug(`[${requestId}] 上游连接中断`);
+            throw new AppError(ErrorDefinitions.LLM.REQUEST_FAILED, { args: ["上游连接中断"], cause: error, context });
+        }
+
+        if (error?.name === "XSAIError" && error.response) {
+            const { status } = error.response;
             context["httpStatus"] = status;
             const retryAfter = error.response.headers?.get("retry-after");
             if (retryAfter) {
@@ -596,15 +614,15 @@ export class ChatModel extends BaseModel implements IChatModel {
             else definition = ErrorDefinitions.LLM.REQUEST_FAILED;
 
             this.logger.error(`🛑 [错误] API 请求失败 | 状态码: ${status} | 模型: ${this.id}`);
-            throw new AppError(definition, { args: [`HTTP ${status}: ${error.message}`], cause: error, context });
+            throw new AppError(definition, { args: [`HTTP ${status}: ${error?.message ?? "无异常描述"}`], cause: error, context });
         }
 
-        if (error.message === "fetch failed") {
+        if (error?.message === "fetch failed") {
             this.logger.error(`🛑 [错误] 网络请求失败 (fetch failed) | 模型: ${this.id}`);
             throw new AppError(ErrorDefinitions.NETWORK.REQUEST_FAILED, { cause: error, context });
         }
 
-        this.logger.error(`🛑 [错误] 未知或网络错误 | ${error.message}`);
+        this.logger.error(`🛑 [错误] 未知或网络错误 | ${error?.message ?? "无异常描述"}`);
         throw new AppError(ErrorDefinitions.NETWORK.REQUEST_FAILED, { cause: error, context });
     }
 }
