@@ -962,7 +962,8 @@ export class ToolService extends YesImBotService<Config> {
         this._logger.debug(`执行工具 · ${functionName}`);
         let lastResult: ToolCallResult = Failed("Tool call did not execute.");
 
-        for (let attempt = 1; attempt <= (this.config.advanced?.maxRetry ?? 0) + 1; attempt++) {
+        const maxAttempts = (this.config.advanced?.maxRetry ?? 0) + 1;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 if (attempt > 1) {
                     this._logger.debug(`工具 ${functionName} · 重试 ${attempt - 1}/${this.config.advanced?.maxRetry ?? 0}`);
@@ -990,15 +991,17 @@ export class ToolService extends YesImBotService<Config> {
                     return lastResult;
                 }
                 if (lastResult.error) {
+                    const { name, code, errorId } = lastResult.error;
+                    const reason = `${name}${code && code !== name ? ` (${code})` : ""}${errorId ? ` · 错误 ID ${errorId}` : ""}`;
                     if (!lastResult.error.retryable) {
-                        this._logger.warn(`工具 ${functionName} · 失败，未重试 · ${lastResult.error.code ?? lastResult.error.name}`);
+                        this._logger.warn(`工具 ${functionName} · 失败，未重试 · ${reason} · 第 ${attempt}/${maxAttempts} 次`);
                         return lastResult;
                     } else {
                         if (!initiallyReadOnly || !isReadOnlyTool(tool, validatedParams)) {
-                            this._logger.warn(`工具 ${functionName} · 失败，有副作用的操作不自动重试 · ${lastResult.error.code ?? lastResult.error.name}`);
+                            this._logger.warn(`工具 ${functionName} · 失败，有副作用的操作不自动重试 · ${reason} · 第 ${attempt}/${maxAttempts} 次`);
                             return { ...lastResult, error: { ...lastResult.error, retryable: false } };
                         }
-                        this._logger.debug(`工具 ${functionName} · 本次读取失败 · ${lastResult.error.code ?? lastResult.error.name}`);
+                        this._logger.debug(`工具 ${functionName} · 本次读取失败 · ${reason} · 第 ${attempt}/${maxAttempts} 次`);
                         continue;
                     }
                 } else {
@@ -1013,7 +1016,7 @@ export class ToolService extends YesImBotService<Config> {
                 return lastResult;
             }
         }
-        this._logger.error(`工具 ${functionName} · 已用完执行次数 · ${lastResult.error?.code ?? lastResult.error?.name ?? "未知错误"}`);
+        this._logger.error(`工具 ${functionName} · 已用完 ${maxAttempts} 次执行机会 · ${lastResult.error?.code ?? lastResult.error?.name ?? "未知错误"}`);
         return lastResult;
     }
 

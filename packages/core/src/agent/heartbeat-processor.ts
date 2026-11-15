@@ -127,12 +127,13 @@ export class HeartbeatProcessor {
         let shouldContinueHeartbeat = true;
         let heartbeatCount = 0;
         let success = false;
+        let failed = false;
 
         while (shouldContinueHeartbeat && heartbeatCount < this.config.heartbeat) {
             heartbeatCount++;
             try {
                 assertReplyTurn();
-                this.logger.debug(`回复轮次 · 第 ${heartbeatCount}/${this.config.heartbeat} 次模型决策`);
+                this.logger.info(`开始模型决策 · 第 ${heartbeatCount}/${this.config.heartbeat} 次`);
                 const onReplySent = () => {
                     success = true;
                 };
@@ -150,6 +151,7 @@ export class HeartbeatProcessor {
                     shouldContinueHeartbeat = result.continue;
                     success = success || result.replySent;
                 } else {
+                    failed = true;
                     shouldContinueHeartbeat = false;
                 }
                 if (shouldContinueHeartbeat) {
@@ -163,11 +165,14 @@ export class HeartbeatProcessor {
                 }
             } catch (error) {
                 if (isReplyTurnCancelled()) break;
+                failed = true;
                 recordConversationReport("turn_failed", { turnId, heartbeat: heartbeatCount, replySent: success });
                 handleError(this.logger, error, `回复轮次 · 第 ${heartbeatCount} 次模型决策`);
                 shouldContinueHeartbeat = false;
             }
         }
+        const outcome = isReplyTurnCancelled() ? "已取消" : failed ? "执行失败" : shouldContinueHeartbeat ? "达到模型决策次数上限" : "执行结束";
+        this.logger.info(`回复轮次 · ${outcome} · 模型决策 ${heartbeatCount} 次 · ${success ? "已发送回复" : "无已确认发送的回复"}`);
         recordConversationReport("turn_finished", { turnId, replySent: success });
         return success;
     }

@@ -91,3 +91,15 @@ it("keeps a queued message's context when the running turn finishes", async () =
     scheduler.dispose();
     await service.stop();
 });
+
+it("shortens generated decision IDs without hiding the target or message ID", () => {
+    const lines: string[] = [];
+    const ctx = stubCtx({}, { logger: () => ({ info: (line: string) => lines.push(line) }) });
+    const service = new LoggerService(ctx, { logging: { level: LogLevel.INFO }, errorReporting: {} } as any);
+    const logger = service.getLogger("model");
+    withConversationLog(target("group-a", { messageId: "101" }), "1836aced-a7f2-4fba-961d-6298c4028a95-1794656019969-61", () => {
+        logger.info("模型返回");
+    });
+    expect(lines).toEqual(["[onebot/bot-01/群聊 group-a] [消息 101] [轮次 1836aced/61] 模型返回"]);
+    return service.stop();
+});

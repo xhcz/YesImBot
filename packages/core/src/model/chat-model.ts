@@ -151,9 +151,10 @@ export class ChatModel extends BaseModel implements IChatModel {
             `[${requestId}] 模型请求 · ${useStream ? "流式" : "非流式"} · ${options.requestPurpose ?? "用途未标注"}${imageCount ? ` · 附带 ${imageCount} 张图片` : ""}`,
         );
 
+        const startedAt = Date.now();
         let streamDiagnostics: (() => Record<string, unknown>) | undefined;
         try {
-            return await withModelConversationReport(
+            const result = await withModelConversationReport(
                 { requestId, provider: this.config.providerName, model: this.id, purpose: options.requestPurpose ?? "对话" },
                 () =>
                     withUsageScope({ contextBudget: budget.report }, () =>
@@ -164,6 +165,10 @@ export class ChatModel extends BaseModel implements IChatModel {
                             : this._executeNonStream(chatOptions, options.singleStep, options.validation, requestId),
                     ),
             );
+            const usage = result.usage;
+            const tokens = usage ? `输入 ${usage.prompt_tokens ?? "未知"} · 输出 ${usage.completion_tokens ?? "未知"}` : "提供商未返回用量";
+            this.logger.info(`[${requestId}] 模型返回 · ${Date.now() - startedAt}ms · 结束原因 ${result.finishReason ?? "未知"} · Token ${tokens}`);
+            return result;
         } catch (error) {
             this.logger.debug(
                 `[${requestId}] 请求异常 | 类型: ${error?.name ?? typeof error} | 错误码: ${error?.code ?? "未知"} | 已取消: ${options.abortSignal?.aborted ?? false}`,

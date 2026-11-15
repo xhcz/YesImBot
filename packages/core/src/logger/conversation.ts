@@ -22,10 +22,16 @@ export function formatLogTarget(target: LogTarget): string {
     return `[${logValue(target.platform ?? "未知")}/${logValue(target.selfId ?? "未知")}/${kind} ${channel}${guild}]`;
 }
 
+// Keep the full identifier in decision records and error reports.
+function displayTurnId(id: string): string {
+    const decision = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-\d+-(\d+)$/i.exec(id);
+    return decision ? `${decision[1]}/${decision[2]}` : logValue(id);
+}
+
 export function withConversationLog<T>(target: LogTarget | undefined, turnId: string | undefined, run: () => T): T {
     if (!target?.channelId) return scope.run(undefined, run);
     const message = target.messageId ? ` [消息 ${logValue(target.messageId)}]` : "";
-    const turn = turnId ? ` [轮次 ${logValue(turnId)}]` : "";
+    const turn = turnId ? ` [轮次 ${displayTurnId(turnId)}]` : "";
     return scope.run(`${formatLogTarget(target)}${message}${turn}`, run);
 }
 

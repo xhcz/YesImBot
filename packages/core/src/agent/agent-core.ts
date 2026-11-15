@@ -254,7 +254,7 @@ export class AgentCore extends YesImBotService<Config> {
                     details.push(`TypeSafe ${factor}${config?.mode === "adjust" ? "（参与计分）" : "（仅观察）"}`);
                 }
                 if (useTopics) details.push(snapshot ? `话题倍率 ${snapshot.multiplier.toFixed(3)}` : "话题评估无结果");
-                this.logger.debug(`辅助评估结束 · ${details.join(" · ")}`);
+                this.logger.info(`辅助评估结束 · ${details.join(" · ")}`);
                 this.processStimulus({ ...stimulus, topic: snapshot }, config?.mode === "adjust" ? (multiplier ?? 1) : 1);
             },
             () => {
@@ -808,8 +808,14 @@ export class AgentCore extends YesImBotService<Config> {
                           ? "未达阈值"
                           : "未抽中";
                 const action = decision && allowSchedule ? " · 提交调度" : !allowSchedule ? " · 仅结算" : "";
+                const state = this.scheduler.isBusy(channelCid) ? "回复忙碌（执行或延后）" : "可接收调度";
+                const calculation = result.calculation;
+                const scoring = calculation
+                    ? ` · 增益 ${calculation.effectiveGain.toFixed(2)} · 阈值 ${calculation.threshold} · 抽样 ${result.roll.toFixed(3)}`
+                    : "";
+                const topicKey = scoreKey !== channelCid ? ` · 话题计分键 ${scoreKey}` : "";
                 this.logger.debug(
-                    `意愿 ${scoreBefore.toFixed(2)} → ${willingnessAfter.toFixed(2)} · 回复概率 ${(result.probability * 100).toFixed(1)}% · ${reason}${action}`,
+                    `意愿 ${scoreBefore.toFixed(2)} → ${willingnessAfter.toFixed(2)} · 回复概率 ${(result.probability * 100).toFixed(1)}% · ${reason}${action} · ${state}${scoring}${topicKey}`,
                 );
             } catch (error) {
                 this.recordDecision(stimulus, { stage: "failed", reason: "exception" });
