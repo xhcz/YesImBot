@@ -81,15 +81,19 @@ export function sourceRef(session: SceneInput, messageId: string): string {
 export function recallTokens(query: string): string[] {
     if (typeof query !== "string" || !query.trim() || query.length > 160) throw new Error("请提供 1–160 字的回忆关键词");
     const words = query.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
-    return [
-        ...new Set(
-            words.flatMap((word) =>
-                /^[\u3400-\u9fff]+$/.test(word) && word.length > 2
-                    ? [word, ...Array.from({ length: word.length - 1 }, (_, i) => word.slice(i, i + 2))]
-                    : [word],
-            ),
-        ),
-    ].slice(0, 24);
+    const tokens = new Set(words);
+    const fragments = new Set<string>();
+    for (const word of words) {
+        const parts = word.match(/[\u3400-\u9fff]+|[^\u3400-\u9fff]+/gu) ?? [];
+        for (const part of parts) {
+            if (part.length < 2) continue;
+            tokens.add(part);
+            if (/^[\u3400-\u9fff]+$/u.test(part)) {
+                for (let i = 0; i + 1 < part.length; i++) fragments.add(part.slice(i, i + 2));
+            }
+        }
+    }
+    return [...new Set([...tokens, ...fragments])].slice(0, 24);
 }
 export function keywordScore(content: string, tokens: string[]): number {
     const text = content.toLocaleLowerCase();
