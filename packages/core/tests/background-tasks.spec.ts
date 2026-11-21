@@ -304,3 +304,23 @@ it.each([
     expect(registry.query("a", task.id)).toMatchObject({ state: "failed", error: "Background task timeout (15ms)" });
     expect(registry.query("a", task.id)).not.toHaveProperty("result");
 });
+
+it("keeps a late completion out of the replacement registry after reload", async () => {
+    const old = fixture({ settlement: "task" });
+    const pending = deferred();
+    const task = old.registry.start("a", "r", "read", () => pending.promise);
+    await settle();
+    old.registry.dispose();
+
+    const replacement = fixture({ settlement: "task" });
+    expect(replacement.registry.list("a")).toEqual([]);
+    expect(() => replacement.registry.query("a", task.id)).toThrow(/Background/);
+    const fresh = replacement.registry.start("a", "r", "read", async () => "fresh");
+    pending.resolve("late");
+    await settle();
+
+    expect(old.events).toEqual([]);
+    expect(replacement.events).toHaveLength(1);
+    expect(replacement.events[0].taskIds).toEqual([fresh.id]);
+    expect(replacement.registry.query("a", fresh.id).result).toBe("fresh");
+});
