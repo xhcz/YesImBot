@@ -120,7 +120,11 @@ test("replays mixed-script recall across groups, private messages and corrected 
     await app.database.upsert("person_memory.experiences", newer);
     const crowded = await tools.get("person_recall").execute({ session, query, limit: 6 });
     assert.equal(crowded.status, "success");
-    assert.deepEqual(crowded.result.sources.map((source) => source.messageId), newer.slice(-6).reverse().map((source) => source.messageId));
+    assert.deepEqual(
+        crowded.result.sources.map((source) => source.messageId),
+        [...expected.slice(0, 2), ...newer.slice(-4).reverse().map((source) => source.messageId)],
+    );
+    assert.equal(crowded.result.omitted, 1);
 });
 
 for (const kind of ["l2", "l3"])

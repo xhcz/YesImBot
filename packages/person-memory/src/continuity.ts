@@ -78,13 +78,16 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 export function sourceRef(session: SceneInput, messageId: string): string {
     return `source:${hash([sceneKey(session), messageId])}`;
 }
+const recallWordParts = (word: string) => word.match(/[\u3400-\u9fff]+|[^\u3400-\u9fff]+/gu) ?? [];
+const recallWords = (query: string) => query.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+
 export function recallTokens(query: string): string[] {
     if (typeof query !== "string" || !query.trim() || query.length > 160) throw new Error("请提供 1–160 字的回忆关键词");
-    const words = query.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+    const words = recallWords(query);
     const tokens = new Set(words);
     const fragments = new Set<string>();
     for (const word of words) {
-        const parts = word.match(/[\u3400-\u9fff]+|[^\u3400-\u9fff]+/gu) ?? [];
+        const parts = recallWordParts(word);
         for (const part of parts) {
             if (part.length < 2) continue;
             tokens.add(part);
@@ -163,37 +166,74 @@ export class ContinuityStore {
             (options.start !== undefined && options.end !== undefined && options.start > options.end)
         )
             throw new Error("无效的回忆范围");
-        if (options.targets && !options.targets.length) return { items: [], omitted: 0, candidateLimit: 200 };
-        if (!tokens.length) return { items: [], omitted: 0, candidateLimit: 200 };
-        const regex = new RegExp(tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "i");
-        const candidates = await this.db.get(
-            EXPERIENCES,
-            {
-                scope,
-                content: { $regex: regex },
-                ...(options.personId ? { personId: options.personId } : {}),
-                ...(options.start !== undefined || options.end !== undefined
-                    ? {
-                          timestamp: {
-                              ...(options.start !== undefined ? { $gte: options.start } : {}),
-                              ...(options.end !== undefined ? { $lte: options.end } : {}),
-                          },
-                      }
-                    : {}),
-                ...(options.targets
-                    ? {
-                          $or: options.targets.map((t) => ({
-                              platform: t.platform,
-                              selfId: t.selfId,
-                              channelId: t.channelId,
-                              isDirect: !!t.isDirect,
-                              ...(conversationChannelId(t) !== t.channelId ? { guildId: t.guildId } : {}),
-                              ...(t.isDirect && t.userId ? { userId: t.userId } : {}),
-                          })),
-                      }
-                    : {}),
-            },
-            { limit: 200, sort: { timestamp: "desc" } },
+        const candidateLimit = 200;
+        if ((options.targets && !options.targets.length) || !tokens.length) return { items: [], omitted: 0, candidateLimit };
+        const regex = (terms: string[]) => new RegExp(terms.join("|"), "i");
+        const filters = {
+            scope,
+            ...(options.personId ? { personId: options.personId } : {}),
+            ...(options.start !== undefined || options.end !== undefined
+                ? {
+                      timestamp: {
+                          ...(options.start !== undefined ? { $gte: options.start } : {}),
+                          ...(options.end !== undefined ? { $lte: options.end } : {}),
+                      },
+                  }
+                : {}),
+            ...(options.targets
+                ? {
+                      $or: options.targets.map((t) => ({
+                          platform: t.platform,
+                          selfId: t.selfId,
+                          channelId: t.channelId,
+                          isDirect: !!t.isDirect,
+                          ...(conversationChannelId(t) !== t.channelId ? { guildId: t.guildId } : {}),
+                          ...(t.isDirect && t.userId ? { userId: t.userId } : {}),
+                      })),
+                  }
+                : {}),
+        };
+        const mixed = recallWords(options.query)
+            .filter((word, index, words) => tokens.includes(word) && words.indexOf(word) === index)
+            .map((word) => ({ word, parts: recallWordParts(word) }))
+            .filter(({ parts }) => parts.length > 1);
+        const separated = mixed
+            .map(({ parts }) => [...new Set(parts.filter((part) => part.length >= 2 && tokens.includes(part)))])
+            .filter((parts) => parts.length > 1);
+        const candidates: Experience[] = [];
+        const exclusions = () => (candidates.length ? { id: { $nin: candidates.map((row) => row.id) } } : {});
+        const sort = { timestamp: "desc" as const };
+        if (mixed.length) {
+            // Reserve a result page for each strong match before newer single-token hits fill the window.
+            candidates.push(
+                ...(await this.db.get(EXPERIENCES, { ...filters, content: { $regex: regex(mixed.map(({ word }) => word)) } }, { limit, sort })),
+            );
+        }
+        if (separated.length) {
+            candidates.push(
+                ...(await this.db.get(
+                    EXPERIENCES,
+                    {
+                        ...filters,
+                        ...exclusions(),
+                        $and: [
+                            {
+                                $or: separated.map((parts) => ({
+                                    $and: parts.map((part) => ({ content: { $regex: regex([part]) } })),
+                                })),
+                            },
+                        ],
+                    },
+                    { limit, sort },
+                )),
+            );
+        }
+        candidates.push(
+            ...(await this.db.get(
+                EXPERIENCES,
+                { ...filters, ...exclusions(), content: { $regex: regex(tokens) } },
+                { limit: candidateLimit - candidates.length, sort },
+            )),
         );
         const state = await this.people.read(scope),
             accounts = new Map(Object.values(state.accounts).map((a) => [a.userId, a]));
@@ -207,7 +247,7 @@ export class ContinuityStore {
             .map((row) => ({ ...row, score: keywordScore(row.content, tokens), status: "source" as const }))
             .sort((a, b) => b.score - a.score || b.timestamp - a.timestamp)
             .slice(0, limit);
-        return { items, omitted: candidates.length - usable.length, candidateLimit: 200 };
+        return { items, omitted: candidates.length - usable.length, candidateLimit };
     }
     async summaryUnsafe(scope: string, platform: string, participants: string[], timestamp: number): Promise<boolean> {
         return summaryUnsafeIn(await this.people.read(scope), platform, participants, timestamp);
