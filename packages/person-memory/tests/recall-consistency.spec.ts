@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "vitest";
 
 import { MustacheRenderer } from "../../core/src/prompt/renderer";
+import { sourceRef } from "../src/continuity";
 import { applySharedMemory } from "../src/shared-runtime";
 import { PersonStore, accountRef, mindScope } from "../src/store";
 import { fixture } from "./helpers";
@@ -61,6 +62,65 @@ test("automatic recall keeps its 4000 character budget while explicit recall and
     assert.ok(automatic.length <= 4020, `automatic recall emitted ${automatic.length} characters`);
     assert.match(automatic, /内容已截断/);
     assert.ok(!automatic.includes("完整结尾"));
+});
+
+test("replays mixed-script recall across groups, private messages and corrected identities", async (t) => {
+    let blockedChannel: string | undefined;
+    const { app, tools, inject } = await runtime(t, {
+        automaticRecall: true,
+        recallScope: "mind",
+        allow: (source) => source.channelId !== blockedChannel,
+    });
+    const group = { ...session, userId: "alice" };
+    const direct = { ...group, channelId: "private-alice", isDirect: true };
+    const blocked = { ...group, channelId: "other-group" };
+    const bob = { ...group, userId: "bob" };
+    const query = "上次 Koishi配置";
+    const rows = [
+        [group, "exact", "Koishi配置已经更新"],
+        [direct, "separated", "Koishi 的配置放在这里"],
+        [blocked, "blocked", "Koishi配置是另一个群的内容"],
+        [bob, "stale", "Koishi配置晚点再看"],
+        [group, "noise", "Koishi 已经启动"],
+    ] as const;
+    for (const [index, [source, messageId, content]] of rows.entries()) {
+        await app.parallel("yesimbot/before-user-stimulus", {
+            ...source,
+            messageId,
+            content,
+            timestamp: Date.UTC(2026, 10, 1) + index,
+            author: { name: source.userId },
+        });
+    }
+    blockedChannel = blocked.channelId;
+    const store = new PersonStore(app.database, "review");
+    await store.bind(mindScope(session), accountRef("onebot", "bob"), accountRef("onebot", "alice"), 1, "admin");
+
+    const result = await tools.get("person_recall").execute({ session, query, limit: 6 });
+    assert.equal(result.status, "success");
+    const expected = [sourceRef(group, "exact"), sourceRef(direct, "separated"), sourceRef(group, "noise")];
+    assert.deepEqual(result.result.sources.map((source) => source.messageId), expected);
+    assert.equal(result.result.omitted, 1);
+
+    const prompt = await inject({ session: { ...session, content: query } });
+    const automatic = prompt.match(/<recalled_sources>([\s\S]*)<\/recalled_sources>/)?.[1];
+    assert.ok(automatic);
+    assert.ok(automatic.length <= 4000);
+    for (const id of expected) assert.ok(automatic.includes(id));
+    assert.ok(!automatic.includes(sourceRef(blocked, "blocked")));
+    assert.ok(!automatic.includes(sourceRef(bob, "stale")));
+
+    const [template] = await app.database.get("person_memory.experiences", { messageId: sourceRef(group, "noise") });
+    const newer = Array.from({ length: 200 }, (_, index) => ({
+        ...template,
+        id: `window-${index}`,
+        messageId: `window-${index}`,
+        timestamp: template.timestamp + index + 1,
+    }));
+    await app.database.upsert("person_memory.experiences", newer);
+    const crowded = await tools.get("person_recall").execute({ session, query, limit: 6 });
+    assert.equal(crowded.status, "success");
+    assert.deepEqual(crowded.result.sources.map((source) => source.messageId), newer.slice(-6).reverse().map((source) => source.messageId));
 });
 
 for (const kind of ["l2", "l3"])
